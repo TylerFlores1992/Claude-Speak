@@ -158,6 +158,64 @@ stops when you background the app — push-to-talk is the mode to live in.
 
 ---
 
+## TestFlight (optional — needs a paid account)
+
+Free signing expires every 7 days. If that gets old, the fix is the **Apple
+Developer Program** ($99/yr), which unlocks App Store Connect and TestFlight.
+Nothing in this project needs to change for it — the icon, the version strings,
+and the encryption declaration are already set up for an upload.
+
+**Internal TestFlight builds last 90 days and skip Beta App Review**, so this is
+purely a distribution convenience: you never submit to the App Store, you never
+talk to a reviewer. (External testing — up to 10,000 people — *does* require
+review. You don't need it.)
+
+### One-time setup
+
+1. Enrol at [developer.apple.com/programs](https://developer.apple.com/programs/).
+2. In Xcode → Signing & Capabilities, set your bundle ID (e.g.
+   `com.tylerflores.PocketClaude`). Xcode registers it on the portal for you.
+3. In [App Store Connect](https://appstoreconnect.apple.com) → Apps → **+** →
+   New App: pick iOS, your bundle ID, and any name that's still free (names must
+   be unique across App Store Connect even for TestFlight-only apps).
+4. Users and Access → add yourself as an **Internal Tester** if you aren't
+   already on the team.
+
+### Each upload
+
+```bash
+# Bump the build number — App Store Connect rejects a build number it has seen.
+agvtool next-version -all
+```
+
+Then in Xcode: destination **Any iOS Device (arm64)** → **Product → Archive** →
+**Distribute App → TestFlight & App Store**.
+
+Processing takes 5–15 minutes, then the build appears under TestFlight and the
+TestFlight app on your phone offers the update.
+
+### What's already handled
+
+| Requirement | Where |
+|---|---|
+| 1024×1024 app icon, no alpha channel | `PocketClaude/Assets.xcassets/AppIcon.appiconset/AppIcon.png` |
+| Version and build driven by build settings | `Config/Info.plist` uses `$(MARKETING_VERSION)` / `$(CURRENT_PROJECT_VERSION)`; `VERSIONING_SYSTEM = apple-generic` makes `agvtool` work |
+| Export compliance | `ITSAppUsesNonExemptEncryption = false` — the app only uses HTTPS through system APIs, which is exempt, so App Store Connect won't ask on every upload |
+| Privacy strings | Microphone and speech-recognition descriptions are in `Config/Info.plist` |
+
+The app icon is a placeholder waveform. Replace `AppIcon.png` with anything
+1024×1024 and **without an alpha channel** — App Store Connect rejects icons that
+have one.
+
+### Worth knowing
+
+- Your keys are **not** in the build. Every tester (i.e. you, on each device)
+  enters their own in Settings; they live in that device's Keychain.
+- Bumping the build number is the single most common upload failure. `agvtool
+  next-version -all` before every archive avoids it.
+- Archive builds use the **Release** configuration, which the unit tests don't
+  exercise by default. Worth one `⌘U` before an upload.
+
 ## If Xcode won't open the project
 
 The `.xcodeproj` here is hand-written and uses `objectVersion = 77`

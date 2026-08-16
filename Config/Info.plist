@@ -16,10 +16,13 @@
 	<string>PocketClaude</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
+	<!-- Driven by the MARKETING_VERSION / CURRENT_PROJECT_VERSION build
+	     settings so `agvtool` (and you, in one place) can bump them. Every
+	     TestFlight upload needs a build number nobody has used before. -->
 	<key>CFBundleShortVersionString</key>
-	<string>1.0</string>
+	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
 
 	<!-- Keeps text-to-speech playing with the screen off and the phone pocketed. -->
 	<key>UIBackgroundModes</key>
