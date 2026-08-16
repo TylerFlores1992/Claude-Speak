@@ -1,0 +1,37 @@
+# Secrets — nothing here should ever be committed.
+# Keys live in the iOS Keychain, entered at runtime in Settings.
+*.env
+.env*
+secrets.json
+Secrets.swift
+*.p12
+*.mobileprovision
+*.cer
+
+# Xcode
+build/
+DerivedData/
+*.xcuserstate
+*.xcuserdatad/
+xcuserdata/
+*.moved-aside
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Xcode keeps per-user scheme/state here; the shared scheme in
+# xcshareddata/ IS committed.
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+*.xcworkspace/xcuserdata/
+
+# Swift Package Manager
+.build/
+.swiftpm/
+Packages/
+Package.resolved
+
+# macOS
+.DS_Store
+*.swp
