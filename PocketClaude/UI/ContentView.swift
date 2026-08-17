@@ -111,7 +111,15 @@ struct ContentView: View {
                     Button {
                         viewModel.isShowingSettings = true
                     } label: {
-                        Label("Add your keys and repo", systemImage: "key.fill")
+                        // Relay mode has no API keys and no repository slug —
+                        // the repo lives on the server — so the direct-API
+                        // wording would send you looking for the wrong fields.
+                        Label(
+                            settings.backend == .relay
+                                ? "Add your relay address"
+                                : "Add your keys and repo",
+                            systemImage: "key.fill"
+                        )
                     }
                 }
             case .listening:

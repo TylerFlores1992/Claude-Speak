@@ -24,6 +24,30 @@
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 
+	<!-- The relay speaks plain HTTP. iOS blocks cleartext by default, so without
+	     this every relay request fails with "App Transport Security policy
+	     requires the use of a secure connection".
+
+	     Why this is acceptable here, and why the narrower keys don't work:
+	       - The relay is only reachable over Tailscale, which is WireGuard. The
+	         traffic is already encrypted at the network layer; adding TLS would
+	         mean managing a certificate in order to re-encrypt a tunnel that is
+	         already encrypted.
+	       - NSAllowsLocalNetworking covers .local, unqualified hostnames, and
+	         RFC 1918 addresses. Tailscale hands out 100.64.0.0/10 (CGNAT),
+	         which it does not cover.
+	       - An NSExceptionDomains entry has to name a specific host, and the
+	         address is whatever you type into Settings.
+
+	     This does not weaken HTTPS. The Anthropic and GitHub calls still
+	     negotiate TLS normally; this only permits cleartext where the URL asks
+	     for it, which in this app is the one relay address you configured. -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
+
 	<!-- Keeps text-to-speech playing with the screen off and the phone pocketed. -->
 	<key>UIBackgroundModes</key>
 	<array>
