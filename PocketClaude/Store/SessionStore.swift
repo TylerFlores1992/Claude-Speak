@@ -30,6 +30,10 @@ struct Session: Codable, Equatable, Sendable {
     var usage: TokenUsage = TokenUsage()
     /// Model that produced most of this session, for the cost estimate.
     var model: String = AppSettings.Model.opus5.rawValue
+    /// Claude Code's own session ID, when answers came from the relay. Passing
+    /// it back as `--resume` is what makes the next question a follow-up.
+    /// Optional so sessions saved by earlier builds still decode.
+    var relaySessionID: String? = nil
 
     var isEmpty: Bool { messages.isEmpty && transcript.isEmpty }
 

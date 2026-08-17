@@ -10,14 +10,20 @@ struct SettingsView: View {
     @State private var anthropicKey = ""
     @State private var githubToken = ""
     @State private var elevenLabsKey = ""
+    @State private var relayToken = ""
     @State private var savedNotice: String?
 
     var body: some View {
         NavigationStack {
             Form {
-                credentialsSection
-                repositorySection
-                modelSection
+                backendSection
+                if settings.backend == .relay {
+                    relaySection
+                } else {
+                    credentialsSection
+                    repositorySection
+                    modelSection
+                }
                 voiceSection
                 listeningSection
                 aboutSection
@@ -40,6 +46,47 @@ struct SettingsView: View {
             } message: {
                 Text(savedNotice ?? "")
             }
+        }
+    }
+
+    // MARK: - Backend
+
+    private var backendSection: some View {
+        Section {
+            Picker("Answers from", selection: $settings.backend) {
+                ForEach(AppSettings.Backend.allCases) { backend in
+                    Text(backend.displayName).tag(backend)
+                }
+            }
+        } header: {
+            Text("Backend")
+        } footer: {
+            switch settings.backend {
+            case .directAPI:
+                Text("Calls Anthropic straight from this phone, billed to your API key per token. Works anywhere with a signal, but can only read the repository and open pull requests — it cannot run anything.")
+            case .relay:
+                Text("Calls the relay on your own machine, which runs the Claude Code CLI against a real checkout. No per-question charge — it uses your Claude subscription — and it can run your tests and builds. Only works while that machine is awake and reachable.")
+            }
+        }
+    }
+
+    private var relaySection: some View {
+        Section {
+            TextField("http://mini-pc:8787", text: $settings.relayURLString)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+                .keyboardType(.URL)
+
+            secretRow(
+                title: "Relay token",
+                placeholder: "matches RELAY_TOKEN",
+                text: $relayToken,
+                key: .relayToken
+            )
+        } header: {
+            Text("Relay")
+        } footer: {
+            Text("Set these to the address and RELAY_TOKEN of `relay/server.mjs` on your machine. A Tailscale hostname keeps the relay off the public internet. The repository, model, and tool permissions are configured on the server, not here — see relay/README.md.")
         }
     }
 
@@ -190,6 +237,8 @@ struct SettingsView: View {
                 Text("Speech rate")
                 Slider(value: $settings.speechRate, in: 0.40...0.70)
             }
+
+            Toggle("Speak while the answer arrives", isOn: $settings.speakIncrementally)
 
             Toggle("Speak write confirmations", isOn: $settings.speakConfirmations)
         } header: {

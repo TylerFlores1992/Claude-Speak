@@ -12,6 +12,8 @@ enum KeychainStore {
         case anthropicAPIKey = "anthropic.api.key"
         case githubToken = "github.pat"
         case elevenLabsAPIKey = "elevenlabs.api.key"
+        /// Bearer token for your own relay — must match RELAY_TOKEN there.
+        case relayToken = "relay.token"
     }
 
     private static let service = "com.pocketclaude.secrets"

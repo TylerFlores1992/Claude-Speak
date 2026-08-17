@@ -83,6 +83,37 @@ written to GitHub until you do.
 
 ---
 
+## Free mode: the relay (optional)
+
+The steps above use the **Direct API** backend, billed to your Anthropic API key
+per token. There is a second backend that costs nothing per question and can do
+considerably more.
+
+**Settings → Backend → Relay (Claude Code)** points the app at a small server on
+a machine you own, which runs the Claude Code CLI against a real checkout. The
+CLI authenticates with your Claude subscription rather than an API key, so
+there's no per-question charge — and because it has a shell, it can run your
+tests and builds, not just read files.
+
+| | Direct API | Relay |
+|---|---|---|
+| Cost | Per token | Free (your subscription) |
+| Can | Read, open PRs | Read, edit, **run tests**, build, `git log` |
+| Needs | A signal | The relay machine awake and reachable |
+
+Full setup — the server, Tailscale, systemd, and the safety defaults — is in
+**[`relay/README.md`](relay/README.md)**. Before setting any of it up, run this
+on the machine you'd use; if it prints a real answer, the rest is plumbing:
+
+```bash
+claude -p "What does the hold lifecycle code do?" --output-format json | jq -r '.result'
+```
+
+Both backends stay installed. Switch between them in Settings — relay at home,
+Direct API when the machine is off.
+
+---
+
 ## Making the GitHub token
 
 Use a **fine-grained** token: [github.com/settings/personal-access-tokens/new](https://github.com/settings/personal-access-tokens/new)
