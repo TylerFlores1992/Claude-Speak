@@ -316,6 +316,24 @@ awkward for arrays. An explicit plist is also just easier to read — it's where
 the two permission strings live, and you should be able to see them. It sits
 outside the synchronised folder so it isn't also copied in as a resource.
 
+### ATS: `NSAllowsArbitraryLoads`, because the relay speaks plain HTTP
+
+The relay is reached at `http://100.x.y.z:8788` over Tailscale, and iOS blocks
+cleartext by default — without an exception every relay request fails with "App
+Transport Security policy requires the use of a secure connection".
+
+The narrower keys don't fit. `NSAllowsLocalNetworking` covers `.local`,
+unqualified hostnames, and RFC 1918 addresses; Tailscale hands out
+`100.64.0.0/10` (CGNAT), which it doesn't cover. `NSExceptionDomains` has to
+name a specific host, and the address is whatever you type into Settings.
+
+The traffic isn't actually unprotected: Tailscale is WireGuard, so it's
+encrypted at the network layer. Terminating TLS on the relay would mean managing
+a certificate in order to re-encrypt an already-encrypted tunnel — which is
+exactly the setup burden the Tailscale choice existed to avoid. The exception
+also doesn't weaken anything else: HTTPS calls still negotiate TLS normally, and
+it only permits cleartext where the URL asks for it.
+
 ### iOS 17, iPhone only, no third-party dependencies
 
 iOS 17 unlocks `AVAudioApplication.requestRecordPermission` and the two-parameter

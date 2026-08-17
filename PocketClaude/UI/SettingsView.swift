@@ -70,12 +70,33 @@ struct SettingsView: View {
         }
     }
 
+    /// What's wrong with the relay address, or nil when it's usable. Deliberately
+    /// says nothing about the token — that row reports its own state.
+    private var relayAddressProblem: String? {
+        let trimmed = settings.relayURLString.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return "No address set" }
+        guard let url = URL(string: trimmed), url.scheme != nil else {
+            return "Needs a scheme, e.g. http://100.x.y.z:8788"
+        }
+        return nil
+    }
+
     private var relaySection: some View {
         Section {
-            TextField("http://mini-pc:8787", text: $settings.relayURLString)
+            // The app-wide `.tint(.indigo)` bleeds into a TextField's
+            // placeholder, so an example address here reads as one you already
+            // entered. The word "Required" is what stops it being mistaken for
+            // a value, and the status line below says plainly whether it is set.
+            TextField("Required — http://100.x.y.z:8788", text: $settings.relayURLString)
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
                 .keyboardType(.URL)
+
+            if let problem = relayAddressProblem {
+                Label(problem, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
 
             secretRow(
                 title: "Relay token",
