@@ -7,7 +7,7 @@ account needed; free personal-team signing is enough.
 
 | | |
 |---|---|
-| Mac with **Xcode 16 or newer** | The project uses Xcode 16's folder-synchronised groups. If you're on Xcode 15, see [If Xcode won't open the project](#if-xcode-wont-open-the-project). |
+| Mac with **Xcode 16 or newer** | The project uses Xcode 16's folder-synchronised groups. If you're on Xcode 15, see [If Xcode won't open the project](#if-xcode-wont-open-the-project). Uploading to App Store Connect needs **Xcode 26+** — Apple rejects builds made with an older SDK. |
 | iPhone running **iOS 17 or newer** | Plus a Lightning/USB-C cable for the first install. |
 | An **Anthropic API key** | [console.anthropic.com](https://console.anthropic.com) → API Keys. |
 | A **GitHub personal access token** | See [Making the GitHub token](#making-the-github-token) below. |

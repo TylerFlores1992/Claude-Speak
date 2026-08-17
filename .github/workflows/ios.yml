@@ -24,23 +24,45 @@ concurrency:
 jobs:
   build:
     name: Build and test
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
 
-      # The runner ships several Xcodes. Pick the newest 16.x rather than
-      # hardcoding a point release that will be replaced next month.
+      # Newest Xcode on the image, whatever its version. Pinning a major version
+      # is what produced an iOS 18.5 SDK build that App Store Connect rejected;
+      # Apple requires the current SDK, so "newest" is the only stable rule.
       - name: Select Xcode
         run: |
-          sudo xcode-select -s "$(ls -d /Applications/Xcode_16*.app | sort -V | tail -1)"
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
           xcodebuild -version
+          xcodebuild -showsdks | grep iphoneos
 
-      # Printed so a "destination not found" failure is diagnosable from the log
-      # instead of a guessing game.
-      - name: List available simulators
-        run: xcrun simctl list devices available
+      # Simulator names change with every Xcode release, so resolve one by UDID
+      # instead of hardcoding "iPhone 16" and having it vanish next year.
+      - name: Pick a simulator
+        run: |
+          xcrun simctl list devices available
+          xcrun simctl list devices available -j > /tmp/sims.json
+          python3 - > /tmp/sim.env <<'PY'
+          import json, sys
+
+          data = json.load(open("/tmp/sims.json"))
+          candidates = [
+              (runtime, device)
+              for runtime, devices in data["devices"].items() if "iOS" in runtime
+              for device in devices if device["name"].startswith("iPhone")
+          ]
+          if not candidates:
+              sys.exit("::error::No iPhone simulator available on this runner")
+
+          runtime, device = candidates[-1]
+          print(f"SIM_UDID={device['udid']}")
+          print(f"SIM_LABEL={device['name']} on {runtime.split('.')[-1]}")
+          PY
+          cat /tmp/sim.env >> "$GITHUB_ENV"
+          sed 's/^/Selected /' /tmp/sim.env
 
       # No log prettifier — a raw xcodebuild log is ugly but it's the one thing
       # that always works, and compiler errors are what we're here to read.
@@ -49,7 +71,7 @@ jobs:
           xcodebuild test \
             -project PocketClaude.xcodeproj \
             -scheme PocketClaude \
-            -destination 'platform=iOS Simulator,name=iPhone 16' \
+            -destination "id=$SIM_UDID" \
             -resultBundlePath TestResults.xcresult \
             CODE_SIGNING_ALLOWED=NO
 
@@ -66,7 +88,7 @@ jobs:
     name: Archive and upload to TestFlight
     needs: build
     if: github.event_name == 'workflow_dispatch' && inputs.upload_to_testflight
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 45
 
     env:
@@ -77,10 +99,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # App Store Connect rejects anything built with an older SDK, and it does
+      # so at the very end of a five-minute job. Check the SDK up front so a
+      # stale runner image fails in seconds with a message that says why.
       - name: Select Xcode
         run: |
-          sudo xcode-select -s "$(ls -d /Applications/Xcode_16*.app | sort -V | tail -1)"
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
           xcodebuild -version
+          SDK=$(xcodebuild -showsdks | sed -n 's/.*-sdk iphoneos\([0-9][0-9]*\).*/\1/p' | sort -n | tail -1)
+          echo "Newest iOS SDK on this runner: $SDK"
+          if [ -z "$SDK" ] || [ "$SDK" -lt 26 ]; then
+            echo "::error::Runner has iOS SDK ${SDK:-none}; App Store Connect requires 26 or later."
+            exit 1
+          fi
 
       # Fail with a readable message rather than a cryptic one 30 seconds later.
       - name: Check secrets are present
