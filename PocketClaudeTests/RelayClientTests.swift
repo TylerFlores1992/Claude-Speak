@@ -49,8 +49,19 @@ final class RelayClientTests: XCTestCase {
         )
     }
 
-    private func sse(_ frames: [(String, String)]) -> Data {
-        Data(frames.map { "event: \($0.0)\ndata: \($0.1)\n\n" }.joined().utf8)
+    /// The lines a real SSE body would produce, in order — `URLSession`'s
+    /// `bytes.lines` strips the newline and yields "" for a blank separator.
+    private func sseLines(_ frames: [(String, String)]) -> AsyncStream<String> {
+        var lines: [String] = []
+        for (event, data) in frames {
+            lines.append("event: \(event)")
+            lines.append("data: \(data)")
+            lines.append("")
+        }
+        return AsyncStream { continuation in
+            for line in lines { continuation.yield(line) }
+            continuation.finish()
+        }
     }
 
     // MARK: - Request shape
@@ -99,17 +110,15 @@ final class RelayClientTests: XCTestCase {
     // MARK: - Streaming
 
     func testStreamsChunksInOrderAndReturnsTheFinalAnswer() async throws {
-        let payload = sse([
+        let payload = sseLines([
             ("session", #"{"sessionId":"session_abc"}"#),
             ("chunk", #"{"text":"The hold "}"#),
             ("tool", #"{"names":["Read","Grep"]}"#),
             ("chunk", #"{"text":"lifecycle is in holds.ts."}"#),
             ("done", #"{"sessionId":"session_abc","costUSD":0.02,"isError":false,"result":"The hold lifecycle is in holds.ts."}"#),
         ])
-        MockURLProtocol.handler = { _ in (200, payload) }
-
         let recorder = EventRecorder()
-        let result = try await makeClient().ask(text: "q", sessionID: nil) { event in
+        let result = try await makeClient().consume(lines: payload) { event in
             recorder.record(event)
         }
 
@@ -127,12 +136,12 @@ final class RelayClientTests: XCTestCase {
     }
 
     func testThrowsWhenTheRelayReportsAnError() async {
-        MockURLProtocol.handler = { _ in
-            (200, self.sse([("error", #"{"message":"not logged in. Run claude auth login."}"#)]))
-        }
+        let payload = sseLines([
+            ("error", #"{"message":"not logged in. Run claude auth login."}"#),
+        ])
 
         do {
-            _ = try await makeClient().ask(text: "q", sessionID: nil) { _ in }
+            _ = try await makeClient().consume(lines: payload) { _ in }
             XCTFail("expected an error")
         } catch let error as RelayError {
             XCTAssertEqual(error, .relay("not logged in. Run claude auth login."))
@@ -164,15 +173,13 @@ final class RelayClientTests: XCTestCase {
 
     func testStopsReadingAfterTheDoneFrame() async throws {
         // Anything after `done` is not part of the answer and must not be spoken.
-        let payload = sse([
+        let payload = sseLines([
             ("chunk", #"{"text":"Answer."}"#),
             ("done", #"{"sessionId":"s","result":"Answer.","isError":false}"#),
             ("chunk", #"{"text":"LEAKED"}"#),
         ])
-        MockURLProtocol.handler = { _ in (200, payload) }
-
         let recorder = EventRecorder()
-        _ = try await makeClient().ask(text: "q", sessionID: nil) { event in
+        _ = try await makeClient().consume(lines: payload) { event in
             recorder.record(event)
         }
 
@@ -181,14 +188,12 @@ final class RelayClientTests: XCTestCase {
     }
 
     func testIgnoresUnknownEventTypes() async throws {
-        let payload = sse([
+        let payload = sseLines([
             ("mystery", #"{"whatever":true}"#),
             ("chunk", #"{"text":"Still fine."}"#),
             ("done", #"{"result":"Still fine.","isError":false}"#),
         ])
-        MockURLProtocol.handler = { _ in (200, payload) }
-
-        let result = try await makeClient().ask(text: "q", sessionID: nil) { _ in }
+        let result = try await makeClient().consume(lines: payload) { _ in }
         XCTAssertEqual(result.text, "Still fine.")
     }
 

@@ -147,13 +147,25 @@ struct RelayClient {
             throw RelayError.http(status: http.statusCode, body: body)
         }
 
+        return try await consume(lines: bytes.lines, onEvent: onEvent)
+    }
+
+    /// Parses an SSE stream into events and a final result.
+    ///
+    /// Split out from `ask` so the framing rules can be tested against a plain
+    /// sequence of lines. Stubbing `URLSession.bytes(for:)` tests URLSession,
+    /// not this; the interesting behaviour is all here.
+    func consume<Lines: AsyncSequence>(
+        lines: Lines,
+        onEvent: @escaping EventHandler
+    ) async throws -> RelayResult where Lines.Element == String {
         var result = RelayResult()
         var eventName = ""
         var dataLine = ""
         var sawTerminal = false
 
         // Minimal SSE reader: accumulate `event:`/`data:` until a blank line.
-        for try await line in bytes.lines {
+        for try await line in lines {
             if line.isEmpty {
                 if let terminal = try await dispatch(
                     eventName: eventName,
