@@ -198,13 +198,17 @@ Add four repository secrets (Settings → Secrets and variables → Actions):
 
 | Secret | Where to get it |
 |---|---|
-| `APP_STORE_CONNECT_KEY_ID` | App Store Connect → Users and Access → Integrations → App Store Connect API → **+**. The 10-character Key ID. |
+| `APP_STORE_CONNECT_KEY_ID` | App Store Connect → Users and Access → Integrations → App Store Connect API → **+**. The 10-character Key ID. Give it the **Admin** role — see below. |
 | `APP_STORE_CONNECT_ISSUER_ID` | Same page, shown above the key list. A UUID. |
 | `APP_STORE_CONNECT_PRIVATE_KEY` | The `.p8` file you download when creating the key — paste its **entire contents**, including the BEGIN/END lines. Apple lets you download it once. |
 | `APPLE_TEAM_ID` | [developer.apple.com/account](https://developer.apple.com/account) → Membership. 10 characters. |
 
-Give the API key the **App Manager** role — Developer isn't enough to upload
-builds.
+Give the API key the **Admin** role. App Manager is enough to *upload* a build,
+but not to create the cloud-managed distribution certificate that signing needs
+— that one is restricted to Admin and the Account Holder. A key without it fails
+at export with `Cloud signing permission error` followed by a misleading `No
+profiles for '...' were found`. A key's role can't be edited after creation, so
+fixing this means revoking the key and generating a new one.
 
 `-allowProvisioningUpdates` plus the API key lets Xcode create the distribution
 certificate and provisioning profile on the runner, so there's no `.p12` to
