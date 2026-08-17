@@ -52,15 +52,22 @@ final class ConversationViewModel: ObservableObject {
 
     private var handsFreeTask: Task<Void, Never>?
 
+    /// Swift note: `recognizer` and `speech` take `nil` defaults and are built in
+    /// the body rather than as default argument values. A default argument
+    /// expression is evaluated at the *call site* in a nonisolated context, so
+    /// `SpeechService()` there is "call to main actor-isolated initializer in a
+    /// synchronous nonisolated context" — even though this whole class is
+    /// `@MainActor`. The init body, by contrast, is main-actor isolated, so
+    /// constructing them here is fine. Tests can still inject their own.
     init(
         settings: AppSettings = AppSettings(),
-        recognizer: SpeechRecognizerService = SpeechRecognizerService(),
-        speech: SpeechService = SpeechService(),
+        recognizer: SpeechRecognizerService? = nil,
+        speech: SpeechService? = nil,
         store: SessionStore = SessionStore()
     ) {
         self.settings = settings
-        self.recognizer = recognizer
-        self.speech = speech
+        self.recognizer = recognizer ?? SpeechRecognizerService()
+        self.speech = speech ?? SpeechService()
         self.store = store
         self.session = store.load() ?? Session(model: settings.model.rawValue)
     }
