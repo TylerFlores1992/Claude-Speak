@@ -28,10 +28,10 @@ In Xcode:
 1. Select the **PocketClaude** target → **Signing & Capabilities**.
 2. **Team**: pick your personal team (your Apple ID). If none is listed, add your
    Apple ID under Xcode → Settings → Accounts first.
-3. **Bundle Identifier**: change `com.pocketclaude.PocketClaude` to something
-   unique to you — `com.tylerflores.PocketClaude`. Free signing rejects an
+3. **Bundle Identifier**: already set to `com.tylerflores.pocketclaude` (tests:
+   `com.tylerflores.pocketclaude.tests`). Change it only if you want a different
+   one — it just has to be globally unique, and free signing rejects an
    identifier someone else has already claimed.
-4. Do the same for the **PocketClaudeTests** target (`…PocketClaudeTests`).
 
 You do **not** need to add any capabilities by hand — background audio, the
 microphone description, and the speech-recognition description are already in
@@ -173,8 +173,10 @@ review. You don't need it.)
 ### One-time setup
 
 1. Enrol at [developer.apple.com/programs](https://developer.apple.com/programs/).
-2. In Xcode → Signing & Capabilities, set your bundle ID (e.g.
-   `com.tylerflores.PocketClaude`). Xcode registers it on the portal for you.
+2. Register the bundle ID `com.tylerflores.pocketclaude` as an **explicit** App
+   ID at [Certificates, Identifiers & Profiles](https://developer.apple.com/account/resources/identifiers/list)
+   — or just build once to a device with automatic signing and Xcode registers
+   it for you. No capabilities need ticking; this app uses no entitlements.
 3. In [App Store Connect](https://appstoreconnect.apple.com) → Apps → **+** →
    New App: pick iOS, your bundle ID, and any name that's still free (names must
    be unique across App Store Connect even for TestFlight-only apps).
