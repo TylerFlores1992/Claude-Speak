@@ -85,21 +85,28 @@ final class CostEstimatorTests: XCTestCase {
 }
 
 final class SessionStoreTests: XCTestCase {
-    private var fileURL: URL!
+    private var directory: URL!
 
     override func setUp() {
         super.setUp()
-        fileURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("pocketclaude-test-\(UUID().uuidString).json")
+        directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pocketclaude-test-\(UUID().uuidString)", isDirectory: true)
     }
 
     override func tearDown() {
-        try? FileManager.default.removeItem(at: fileURL)
+        try? FileManager.default.removeItem(at: directory)
         super.tearDown()
     }
 
+    private func makeSession(question: String) -> Session {
+        var session = Session()
+        session.messages = [.userText(question)]
+        session.transcript = [TranscriptEntry(kind: .user, text: question)]
+        return session
+    }
+
     func testSaveAndLoadPreservesRawContentBlocks() throws {
-        let store = SessionStore(fileURL: fileURL)
+        let store = SessionStore(directory: directory)
         var session = Session()
         session.messages = [
             .userText("hello"),
@@ -112,7 +119,7 @@ final class SessionStoreTests: XCTestCase {
         session.usage = TokenUsage(inputTokens: 10, outputTokens: 3)
 
         store.save(session)
-        let loaded = try XCTUnwrap(store.load())
+        let loaded = try XCTUnwrap(store.load(id: session.id))
 
         XCTAssertEqual(loaded.messages, session.messages)
         XCTAssertEqual(
@@ -123,15 +130,94 @@ final class SessionStoreTests: XCTestCase {
     }
 
     func testLoadReturnsNilWhenNothingSaved() {
-        XCTAssertNil(SessionStore(fileURL: fileURL).load())
+        XCTAssertNil(SessionStore(directory: directory).loadMostRecent())
     }
 
-    func testClearRemovesTheFile() {
-        let store = SessionStore(fileURL: fileURL)
+    func testDeleteRemovesOnlyThatSession() {
+        let store = SessionStore(directory: directory)
+        let keep = makeSession(question: "keep me")
+        let drop = makeSession(question: "drop me")
+        store.save(keep)
+        store.save(drop)
+
+        store.delete(id: drop.id)
+
+        XCTAssertNotNil(store.load(id: keep.id))
+        XCTAssertNil(store.load(id: drop.id))
+    }
+
+    func testSessionsAccumulateRatherThanOverwrite() {
+        // The whole point of the rewrite: starting a new conversation must not
+        // destroy the previous one.
+        let store = SessionStore(directory: directory)
+        store.save(makeSession(question: "first"))
+        store.save(makeSession(question: "second"))
+        store.save(makeSession(question: "third"))
+
+        XCTAssertEqual(store.summaries().count, 3)
+    }
+
+    func testEmptySessionsAreNotSaved() {
+        let store = SessionStore(directory: directory)
         store.save(Session())
-        XCTAssertNotNil(store.load())
-        store.clear()
-        XCTAssertNil(store.load())
+        XCTAssertTrue(store.summaries().isEmpty)
+    }
+
+    func testSummariesAreNewestFirst() {
+        let store = SessionStore(directory: directory)
+        store.save(makeSession(question: "older"))
+        store.save(makeSession(question: "newer"))
+
+        let titles = store.summaries().map(\.title)
+        XCTAssertEqual(titles.first, "newer")
+    }
+
+    func testTitleComesFromTheFirstQuestion() {
+        let session = makeSession(question: "What does the hold lifecycle do?")
+        XCTAssertEqual(session.title, "What does the hold lifecycle do?")
+    }
+
+    func testTitleFallsBackToADateWhenThereIsNoQuestion() {
+        XCTAssertFalse(Session().title.isEmpty)
+    }
+
+    func testSearchMatchesTranscriptText() {
+        var session = makeSession(question: "how do holds expire")
+        session.transcript.append(
+            TranscriptEntry(kind: .assistant, text: "They expire in reservations.ts")
+        )
+        let summary = SessionSummary(session)
+
+        XCTAssertTrue(summary.matches("reservations"))
+        XCTAssertTrue(summary.matches("holds expire"))
+        XCTAssertTrue(summary.matches("HOLDS"), "search should be case-insensitive")
+        XCTAssertFalse(summary.matches("campsite pricing"))
+    }
+
+    func testEmptySearchMatchesEverything() {
+        XCTAssertTrue(SessionSummary(makeSession(question: "anything")).matches("  "))
+    }
+
+    func testLegacySingleSessionFileIsMigrated() throws {
+        // Upgrading from a single-session build must not lose the conversation
+        // that was open at the time.
+        try FileManager.default.createDirectory(
+            at: directory, withIntermediateDirectories: true
+        )
+        let legacy = directory.appendingPathComponent("pocketclaude-session.json")
+        let session = makeSession(question: "from the old build")
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        try encoder.encode(session).write(to: legacy)
+
+        let store = SessionStore(directory: directory)
+
+        XCTAssertEqual(store.summaries().count, 1)
+        XCTAssertEqual(store.summaries().first?.title, "from the old build")
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: legacy.path),
+            "the legacy file should be removed once migrated"
+        )
     }
 }
 

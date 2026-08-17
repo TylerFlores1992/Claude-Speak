@@ -7,7 +7,7 @@ account needed; free personal-team signing is enough.
 
 | | |
 |---|---|
-| Mac with **Xcode 16 or newer** | The project uses Xcode 16's folder-synchronised groups. If you're on Xcode 15, see [If Xcode won't open the project](#if-xcode-wont-open-the-project). |
+| Mac with **Xcode 16 or newer** | The project uses Xcode 16's folder-synchronised groups. If you're on Xcode 15, see [If Xcode won't open the project](#if-xcode-wont-open-the-project). Uploading to App Store Connect needs **Xcode 26+** — Apple rejects builds made with an older SDK. |
 | iPhone running **iOS 17 or newer** | Plus a Lightning/USB-C cable for the first install. |
 | An **Anthropic API key** | [console.anthropic.com](https://console.anthropic.com) → API Keys. |
 | A **GitHub personal access token** | See [Making the GitHub token](#making-the-github-token) below. |
@@ -80,6 +80,37 @@ Try a write, too:
 It will read out something like *"Create the branch fix slash hold decline.
 Confirm?"* — say **"confirm"** (hold the button) or tap **Confirm**. Nothing is
 written to GitHub until you do.
+
+---
+
+## Free mode: the relay (optional)
+
+The steps above use the **Direct API** backend, billed to your Anthropic API key
+per token. There is a second backend that costs nothing per question and can do
+considerably more.
+
+**Settings → Backend → Relay (Claude Code)** points the app at a small server on
+a machine you own, which runs the Claude Code CLI against a real checkout. The
+CLI authenticates with your Claude subscription rather than an API key, so
+there's no per-question charge — and because it has a shell, it can run your
+tests and builds, not just read files.
+
+| | Direct API | Relay |
+|---|---|---|
+| Cost | Per token | Free (your subscription) |
+| Can | Read, open PRs | Read, edit, **run tests**, build, `git log` |
+| Needs | A signal | The relay machine awake and reachable |
+
+Full setup — the server, Tailscale, systemd, and the safety defaults — is in
+**[`relay/README.md`](relay/README.md)**. Before setting any of it up, run this
+on the machine you'd use; if it prints a real answer, the rest is plumbing:
+
+```bash
+claude -p "What does the hold lifecycle code do?" --output-format json | jq -r '.result'
+```
+
+Both backends stay installed. Switch between them in Settings — relay at home,
+Direct API when the machine is off.
 
 ---
 
@@ -198,17 +229,29 @@ Add four repository secrets (Settings → Secrets and variables → Actions):
 
 | Secret | Where to get it |
 |---|---|
-| `APP_STORE_CONNECT_KEY_ID` | App Store Connect → Users and Access → Integrations → App Store Connect API → **+**. The 10-character Key ID. |
+| `APP_STORE_CONNECT_KEY_ID` | App Store Connect → Users and Access → Integrations → App Store Connect API → **+**. The 10-character Key ID. Give it the **Admin** role — see below. |
 | `APP_STORE_CONNECT_ISSUER_ID` | Same page, shown above the key list. A UUID. |
 | `APP_STORE_CONNECT_PRIVATE_KEY` | The `.p8` file you download when creating the key — paste its **entire contents**, including the BEGIN/END lines. Apple lets you download it once. |
 | `APPLE_TEAM_ID` | [developer.apple.com/account](https://developer.apple.com/account) → Membership. 10 characters. |
 
-Give the API key the **App Manager** role — Developer isn't enough to upload
-builds.
+Give the API key the **Admin** role. App Manager is enough to *upload* a build,
+but not to create the cloud-managed distribution certificate that signing needs
+— that one is restricted to Admin and the Account Holder. A key without it fails
+at export with `Cloud signing permission error` followed by a misleading `No
+profiles for '...' were found`. A key's role can't be edited after creation, so
+fixing this means revoking the key and generating a new one.
 
 `-allowProvisioningUpdates` plus the API key lets Xcode create the distribution
 certificate and provisioning profile on the runner, so there's no `.p12` to
 export from a Mac you don't have.
+
+The archive passes `CODE_SIGN_IDENTITY="Apple Distribution"` deliberately.
+Automatic signing reads that setting to decide which kind of profile to mint,
+and the iOS default (`Apple Development`) needs at least one **registered
+device** — which a CI runner doesn't have, and which you can't easily add
+without a Mac. A distribution profile needs no devices, and it's what an upload
+wants anyway. If that still fails, the step retries with `CODE_SIGNING_ALLOWED=NO`
+and lets `-exportArchive` do the signing instead.
 
 Note macOS runners consume Actions minutes at **10×**, so a free-tier private
 repo gets roughly 200 macOS minutes a month. If that bites, change the `build`

@@ -44,6 +44,12 @@ final class ConversationViewModel: ObservableObject {
     private var executor: ToolExecutor?
     private var executorRepoSlug: String?
 
+    /// The assistant transcript line currently being streamed into, so chunks
+    /// update one entry instead of appending a line each.
+    private var streamingEntryID: UUID?
+    /// Text accumulated from relay chunks this turn.
+    private var streamedSoFar = ""
+
     /// Resumed by `resolveConfirmation` when the person approves or declines.
     private var confirmationContinuation: CheckedContinuation<Bool, Never>?
     /// Non-nil exactly while a write is waiting on the person. Doubles as the
@@ -69,7 +75,7 @@ final class ConversationViewModel: ObservableObject {
         self.recognizer = recognizer ?? SpeechRecognizerService()
         self.speech = speech ?? SpeechService()
         self.store = store
-        self.session = store.load() ?? Session(model: settings.model.rawValue)
+        self.session = store.loadMostRecent() ?? Session(model: settings.model.rawValue)
     }
 
     // MARK: - Permissions
@@ -214,6 +220,138 @@ final class ConversationViewModel: ObservableObject {
 
     func send(_ text: String) async {
         guard !text.isEmpty else { return }
+        switch settings.backend {
+        case .relay:
+            await sendViaRelay(text)
+        case .directAPI:
+            await sendViaDirectAPI(text)
+        }
+    }
+
+    // MARK: - Relay backend
+
+    /// Asks the relay on your own machine, which runs the Claude Code CLI
+    /// against a real checkout. Nothing here is billed per token — see
+    /// `relay/README.md`.
+    private func sendViaRelay(_ text: String) async {
+        guard let client = RelayClient.make(settings: settings) else {
+            errorMessage = RelayError.notConfigured.errorDescription
+            state = .idle
+            isShowingSettings = true
+            return
+        }
+
+        append(.init(kind: .user, text: text))
+        state = .working("Asking Claude Code")
+
+        // Speaking as it arrives is the whole reason the relay streams. When
+        // it's off we behave like the direct path: wait, then read the answer.
+        let streaming = settings.speakIncrementally
+        if streaming {
+            speech.beginStreaming(
+                engine: settings.voiceEngine,
+                voiceIdentifier: settings.systemVoiceIdentifier,
+                elevenLabsVoiceID: settings.elevenLabsVoiceID,
+                rate: settings.speechRate
+            )
+        }
+
+        do {
+            let result = try await client.ask(
+                text: text,
+                sessionID: session.relaySessionID
+            ) { [weak self] event in
+                self?.handleRelay(event, streaming: streaming)
+            }
+
+            if let id = result.sessionId { session.relaySessionID = id }
+
+            // The `result` field is authoritative; the streamed chunks are a
+            // preview and can be missing a tail if the stream was cut short.
+            let answer = result.text?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let spoken = (answer?.isEmpty == false ? answer! : streamedSoFar)
+            guard !spoken.isEmpty else { throw RelayError.emptyResponse }
+
+            upsertStreamingEntry(text: spoken, final: true)
+            persist()
+
+            if streaming {
+                state = .speaking
+                speech.finishStreaming()
+            } else {
+                state = .speaking
+                if settings.stemPressControl {
+                    remoteCommands.publishNowPlaying(title: spoken, isPlaying: true)
+                }
+                speech.speak(
+                    spoken,
+                    engine: settings.voiceEngine,
+                    voiceIdentifier: settings.systemVoiceIdentifier,
+                    elevenLabsVoiceID: settings.elevenLabsVoiceID,
+                    rate: settings.speechRate
+                )
+            }
+            await waitForSpeechToFinish()
+            if case .speaking = state { state = .idle }
+        } catch {
+            speech.stop()
+            streamingEntryID = nil
+            streamedSoFar = ""
+            let message = (error as? LocalizedError)?.errorDescription
+                ?? error.localizedDescription
+            errorMessage = message
+            append(.init(kind: .error, text: message))
+            persist()
+            state = .idle
+        }
+    }
+
+    private func handleRelay(_ event: RelayEvent, streaming: Bool) {
+        switch event {
+        case .session(let id):
+            session.relaySessionID = id
+
+        case .chunk(let text):
+            streamedSoFar += text
+            // Show the answer building on screen even when speech is off.
+            upsertStreamingEntry(text: streamedSoFar, final: false)
+            if streaming {
+                if state != .speaking { state = .speaking }
+                speech.appendStreaming(text)
+            }
+
+        case .tool(let names):
+            let label = names
+                .map { $0.replacingOccurrences(of: "_", with: " ") }
+                .joined(separator: ", ")
+            // Don't stomp the speaking state once the answer has started.
+            if state != .speaking { state = .working(label) }
+
+        case .status(let text):
+            if state != .speaking { state = .working(text) }
+        }
+    }
+
+    /// Keeps a single assistant entry updated as text streams in, rather than
+    /// appending one line per fragment.
+    private func upsertStreamingEntry(text: String, final: Bool) {
+        if let id = streamingEntryID,
+           let index = session.transcript.firstIndex(where: { $0.id == id }) {
+            session.transcript[index].text = text
+        } else {
+            let entry = TranscriptEntry(kind: .assistant, text: text)
+            streamingEntryID = entry.id
+            session.transcript.append(entry)
+        }
+        if final {
+            streamingEntryID = nil
+            streamedSoFar = ""
+        }
+    }
+
+    // MARK: - Direct API backend
+
+    private func sendViaDirectAPI(_ text: String) async {
         guard let repository = settings.repository else {
             errorMessage = "Set your repository (owner/repo) in Settings first."
             state = .idle
@@ -416,10 +554,60 @@ final class ConversationViewModel: ObservableObject {
         cancelListening()
         // A dangling confirmation would leak its continuation forever.
         if confirmationContinuation != nil { resolveConfirmation(false) }
+        streamingEntryID = nil
+        streamedSoFar = ""
+        // Keep the old conversation. This used to delete it, which meant a
+        // mistapped toolbar button destroyed an hour of context with no undo.
+        store.save(session)
+        // A fresh Session carries no relaySessionID, so the next relay question
+        // starts a new Claude Code conversation rather than resuming this one.
         session = Session(model: settings.model.rawValue)
-        store.clear()
         state = .idle
         errorMessage = nil
+    }
+
+    // MARK: - Session history
+
+    /// Everything saved, newest first. Reads the session directory, so call it
+    /// when the list is shown rather than keeping it live.
+    func sessionSummaries() -> [SessionSummary] {
+        // Include the open conversation, which may not be on disk yet.
+        var summaries = store.summaries().filter { $0.id != session.id }
+        if !session.isEmpty {
+            summaries.insert(SessionSummary(session), at: 0)
+        }
+        return summaries.sorted { $0.updatedAt > $1.updatedAt }
+    }
+
+    /// Opens a previous conversation, saving the current one first.
+    func switchToSession(id: UUID) {
+        guard id != session.id else { return }
+        speech.stop()
+        cancelListening()
+        if confirmationContinuation != nil { resolveConfirmation(false) }
+        streamingEntryID = nil
+        streamedSoFar = ""
+
+        store.save(session)
+        guard let restored = store.load(id: id) else {
+            errorMessage = "That conversation could not be opened."
+            return
+        }
+        session = restored
+        state = .idle
+        errorMessage = nil
+    }
+
+    func deleteSession(id: UUID) {
+        store.delete(id: id)
+        // Deleting the conversation you're in leaves you on a blank one.
+        if id == session.id {
+            speech.stop()
+            streamingEntryID = nil
+            streamedSoFar = ""
+            session = Session(model: settings.model.rawValue)
+            state = .idle
+        }
     }
 
     func repeatLastAnswer() {

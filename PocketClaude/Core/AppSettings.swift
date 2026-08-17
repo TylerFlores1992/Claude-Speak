@@ -35,8 +35,29 @@ final class AppSettings: ObservableObject {
         }
     }
 
+    /// Where answers come from.
+    ///
+    /// `directAPI` calls Anthropic from the phone and is billed per token.
+    /// `relay` calls your own machine, which runs the Claude Code CLI on your
+    /// subscription — no per-question charge, and it can run your tests.
+    enum Backend: String, CaseIterable, Identifiable {
+        case directAPI
+        case relay
+
+        var id: String { rawValue }
+
+        var displayName: String {
+            switch self {
+            case .directAPI: return "Direct API"
+            case .relay: return "Relay (Claude Code)"
+            }
+        }
+    }
+
     /// `output_config.effort` — controls how much thinking and tool work Claude
     /// does per turn. Higher costs more tokens and takes longer.
+    /// Applies to the direct-API path only; the relay's model config lives on
+    /// the server, where Claude Code owns it.
     enum Effort: String, CaseIterable, Identifiable {
         case low, medium, high, xhigh, max
         var id: String { rawValue }
@@ -53,6 +74,18 @@ final class AppSettings: ObservableObject {
             case .elevenLabs: return "ElevenLabs"
             }
         }
+    }
+
+    @Published var backend: Backend {
+        didSet { defaults.set(backend.rawValue, forKey: Keys.backend) }
+    }
+    /// e.g. `http://mini-pc:8787` — a Tailscale name keeps it off the internet.
+    @Published var relayURLString: String {
+        didSet { defaults.set(relayURLString, forKey: Keys.relayURLString) }
+    }
+    /// Speak each sentence as it streams in, rather than waiting for the end.
+    @Published var speakIncrementally: Bool {
+        didSet { defaults.set(speakIncrementally, forKey: Keys.speakIncrementally) }
     }
 
     @Published var model: Model {
@@ -115,6 +148,9 @@ final class AppSettings: ObservableObject {
     private let defaults: UserDefaults
 
     private enum Keys {
+        static let backend = "settings.backend"
+        static let relayURLString = "settings.relayURL"
+        static let speakIncrementally = "settings.speakIncrementally"
         static let model = "settings.model"
         static let effort = "settings.effort"
         static let maxTokens = "settings.maxTokens"
@@ -134,6 +170,9 @@ final class AppSettings: ObservableObject {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        self.backend = Backend(rawValue: defaults.string(forKey: Keys.backend) ?? "") ?? .directAPI
+        self.relayURLString = defaults.string(forKey: Keys.relayURLString) ?? ""
+        self.speakIncrementally = defaults.object(forKey: Keys.speakIncrementally) as? Bool ?? true
         self.model = Model(rawValue: defaults.string(forKey: Keys.model) ?? "") ?? .opus5
         self.effort = Effort(rawValue: defaults.string(forKey: Keys.effort) ?? "") ?? .high
         let storedMaxTokens = defaults.integer(forKey: Keys.maxTokens)
@@ -163,7 +202,27 @@ final class AppSettings: ObservableObject {
         return (parts[0], parts[1])
     }
 
+    /// Whether the selected backend has everything it needs to answer a question.
+    /// The two paths need entirely different things, so this switches on mode
+    /// rather than demanding the union of both.
     var isConfigured: Bool {
-        KeychainStore.has(.anthropicAPIKey) && KeychainStore.has(.githubToken) && repository != nil
+        switch backend {
+        case .directAPI:
+            return KeychainStore.has(.anthropicAPIKey)
+                && KeychainStore.has(.githubToken)
+                && repository != nil
+        case .relay:
+            return isRelayConfigured
+        }
+    }
+
+    /// The relay needs an address and a token; the repository lives on the
+    /// server, so `repositorySlug` is irrelevant in this mode.
+    var isRelayConfigured: Bool {
+        let trimmed = relayURLString.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let url = URL(string: trimmed), url.scheme != nil else {
+            return false
+        }
+        return KeychainStore.has(.relayToken)
     }
 }

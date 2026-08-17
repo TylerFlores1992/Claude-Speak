@@ -18,6 +18,18 @@ final class SpeechService: NSObject, ObservableObject {
     /// Cancelling this aborts an in-flight ElevenLabs request.
     private var remoteTask: Task<Void, Never>?
 
+    // Streaming state. `queuedUtterances` tracks how many utterances are still
+    // in the synthesiser's queue, so `isSpeaking` only drops when the last one
+    // finishes rather than the first.
+    private var chunker = SpeechChunker()
+    private var queuedUtterances = 0
+    private var streamIsOpen = false
+    private var streamedText = ""
+    private var streamEngine: AppSettings.VoiceEngine = .system
+    private var streamVoiceIdentifier = ""
+    private var streamElevenLabsVoiceID = ""
+    private var streamRate = 0.52
+
     override init() {
         super.init()
         synthesizer.delegate = self
@@ -63,10 +75,107 @@ final class SpeechService: NSObject, ObservableObject {
         }
     }
 
+    // MARK: - Streaming
+
+    /// Opens a streaming turn: text can be fed in as it arrives and is spoken
+    /// sentence by sentence, so the answer starts playing while it's still
+    /// being written.
+    ///
+    /// Only the system voice streams. ElevenLabs bills per character and
+    /// synthesises a whole clip per request, so streaming it would mean one
+    /// paid HTTP round trip per sentence and audible gaps between them — that
+    /// engine buffers and speaks once at `finishStreaming`.
+    func beginStreaming(
+        engine: AppSettings.VoiceEngine,
+        voiceIdentifier: String,
+        elevenLabsVoiceID: String,
+        rate: Double
+    ) {
+        stop()
+        lastError = nil
+        try? AudioSessionController.configureForPlayback()
+
+        chunker = SpeechChunker()
+        streamedText = ""
+        streamIsOpen = true
+        streamEngine = engine
+        streamVoiceIdentifier = voiceIdentifier
+        streamElevenLabsVoiceID = elevenLabsVoiceID
+        streamRate = rate
+        // Held true for the whole turn so the caller's "wait until it stops"
+        // loop doesn't exit in the gap before the first sentence completes.
+        isSpeaking = true
+    }
+
+    /// Feeds one fragment into the open stream.
+    func appendStreaming(_ text: String) {
+        guard streamIsOpen else { return }
+        streamedText += text
+        guard streamEngine == .system else { return } // ElevenLabs speaks at the end.
+
+        for utterance in chunker.append(text) {
+            enqueue(utterance)
+        }
+    }
+
+    /// Closes the stream and says whatever is left.
+    func finishStreaming() {
+        guard streamIsOpen else { return }
+        streamIsOpen = false
+
+        switch streamEngine {
+        case .system:
+            for utterance in chunker.flush() {
+                enqueue(utterance)
+            }
+            // Nothing was queued and nothing is playing — the turn is silent.
+            if queuedUtterances == 0 && !synthesizer.isSpeaking {
+                isSpeaking = false
+            }
+        case .elevenLabs:
+            let text = streamedText
+            streamedText = ""
+            guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                isSpeaking = false
+                return
+            }
+            speak(
+                text,
+                engine: .elevenLabs,
+                voiceIdentifier: streamVoiceIdentifier,
+                elevenLabsVoiceID: streamElevenLabsVoiceID,
+                rate: streamRate
+            )
+        }
+    }
+
+    private func enqueue(_ text: String) {
+        let utterance = AVSpeechUtterance(string: text)
+        if !streamVoiceIdentifier.isEmpty,
+           let voice = AVSpeechSynthesisVoice(identifier: streamVoiceIdentifier) {
+            utterance.voice = voice
+        } else {
+            utterance.voice = AVSpeechSynthesisVoice(language: "en-US")
+        }
+        utterance.rate = Float(streamRate)
+        // A short gap between sentences sounds like reading rather than a
+        // single run-on breath.
+        utterance.postUtteranceDelay = 0.08
+        queuedUtterances += 1
+        isSpeaking = true
+        // AVSpeechSynthesizer queues rather than replaces, which is what makes
+        // sentence-at-a-time playback continuous.
+        synthesizer.speak(utterance)
+    }
+
     /// Cancels any speech in progress. Safe to call when nothing is playing.
     func stop() {
         remoteTask?.cancel()
         remoteTask = nil
+        streamIsOpen = false
+        queuedUtterances = 0
+        chunker = SpeechChunker()
+        streamedText = ""
         if synthesizer.isSpeaking {
             synthesizer.stopSpeaking(at: .immediate)
         }
@@ -121,14 +230,24 @@ extension SpeechService: AVSpeechSynthesizerDelegate {
         _ synthesizer: AVSpeechSynthesizer,
         didFinish utterance: AVSpeechUtterance
     ) {
-        Task { @MainActor [weak self] in self?.isSpeaking = false }
+        Task { @MainActor [weak self] in self?.utteranceEnded() }
     }
 
     nonisolated func speechSynthesizer(
         _ synthesizer: AVSpeechSynthesizer,
         didCancel utterance: AVSpeechUtterance
     ) {
-        Task { @MainActor [weak self] in self?.isSpeaking = false }
+        Task { @MainActor [weak self] in self?.utteranceEnded() }
+    }
+
+    /// One queued utterance finished. During a stream there may be more coming,
+    /// so `isSpeaking` only drops once the queue is empty *and* the stream is
+    /// closed — otherwise the caller would think the answer was over after the
+    /// first sentence.
+    private func utteranceEnded() {
+        queuedUtterances = max(0, queuedUtterances - 1)
+        guard queuedUtterances == 0, !streamIsOpen else { return }
+        isSpeaking = false
     }
 }
 
