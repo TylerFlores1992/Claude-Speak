@@ -183,7 +183,38 @@ review. You don't need it.)
 4. Users and Access → add yourself as an **Internal Tester** if you aren't
    already on the team.
 
-### Each upload
+### Building without a Mac
+
+`.github/workflows/ios.yml` runs everything on GitHub's macOS runners, so you
+never need Xcode locally.
+
+- **`build`** runs on every push: compiles and runs the tests, no secrets, no
+  Apple account. This is your compiler.
+- **`ship`** is manual only — Actions tab → **iOS** → **Run workflow** → tick
+  *Archive and upload to TestFlight*. It signs, archives, and uploads, using
+  `github.run_number` as the build number so it's always unique.
+
+Add four repository secrets (Settings → Secrets and variables → Actions):
+
+| Secret | Where to get it |
+|---|---|
+| `APP_STORE_CONNECT_KEY_ID` | App Store Connect → Users and Access → Integrations → App Store Connect API → **+**. The 10-character Key ID. |
+| `APP_STORE_CONNECT_ISSUER_ID` | Same page, shown above the key list. A UUID. |
+| `APP_STORE_CONNECT_PRIVATE_KEY` | The `.p8` file you download when creating the key — paste its **entire contents**, including the BEGIN/END lines. Apple lets you download it once. |
+| `APPLE_TEAM_ID` | [developer.apple.com/account](https://developer.apple.com/account) → Membership. 10 characters. |
+
+Give the API key the **App Manager** role — Developer isn't enough to upload
+builds.
+
+`-allowProvisioningUpdates` plus the API key lets Xcode create the distribution
+certificate and provisioning profile on the runner, so there's no `.p12` to
+export from a Mac you don't have.
+
+Note macOS runners consume Actions minutes at **10×**, so a free-tier private
+repo gets roughly 200 macOS minutes a month. If that bites, change the `build`
+job's `on:` to only run on `main` and pull requests.
+
+### Each upload (from a Mac)
 
 ```bash
 # Bump the build number — App Store Connect rejects a build number it has seen.
