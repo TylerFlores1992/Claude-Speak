@@ -7,6 +7,7 @@ struct ContentView: View {
 
     @State private var typedInput = ""
     @State private var isShowingTypedInput = false
+    @State private var isShowingSessions = false
 
     var body: some View {
         NavigationStack {
@@ -37,11 +38,16 @@ struct ContentView: View {
             .navigationTitle("PocketClaude")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
+                ToolbarItemGroup(placement: .topBarLeading) {
                     Button { viewModel.newSession() } label: {
                         Image(systemName: "square.and.pencil")
                     }
                     .accessibilityLabel("New session")
+
+                    Button { isShowingSessions = true } label: {
+                        Image(systemName: "clock.arrow.circlepath")
+                    }
+                    .accessibilityLabel("Past conversations")
                 }
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     Button { isShowingTypedInput.toggle() } label: {
@@ -62,6 +68,9 @@ struct ContentView: View {
             }
             .sheet(isPresented: $viewModel.isShowingSettings) {
                 SettingsView(settings: settings)
+            }
+            .sheet(isPresented: $isShowingSessions) {
+                SessionListView(viewModel: viewModel)
             }
             .alert(
                 "Something went wrong",
