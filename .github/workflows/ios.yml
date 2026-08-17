@@ -82,17 +82,71 @@ jobs:
           sudo xcode-select -s "$(ls -d /Applications/Xcode_16*.app | sort -V | tail -1)"
           xcodebuild -version
 
+      # Fail with a readable message rather than a cryptic one 30 seconds later.
+      - name: Check secrets are present
+        env:
+          KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          missing=0
+          for name in KEY_ID ISSUER_ID PRIVATE_KEY TEAM_ID; do
+            if [ -z "${!name}" ]; then echo "::error::Secret for $name is empty or missing"; missing=1; fi
+          done
+          [ "$missing" -eq 0 ] || exit 1
+          echo "Key ID length: ${#KEY_ID}   (expected 10)"
+          echo "Issuer ID length: ${#ISSUER_ID}   (expected 36)"
+          echo "Team ID length: ${#TEAM_ID}   (expected 10)"
+
       # The App Store Connect API key replaces an Apple ID + 2FA, which is the
       # only practical way to authenticate from an unattended machine.
+      #
+      # The .p8 is rebuilt from scratch rather than echoed straight out of the
+      # secret. Pasting a PEM into a web form flattens the line breaks often
+      # enough that "invalidPEMDocument" is the single most common failure here;
+      # re-wrapping the base64 body at 64 columns makes the step work whether the
+      # secret arrived multi-line, single-line, or with escaped \n sequences.
       - name: Write App Store Connect API key
         env:
           KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
           PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
         run: |
           mkdir -p ~/private_keys ~/.appstoreconnect/private_keys
-          echo "$PRIVATE_KEY" > ~/private_keys/AuthKey_${KEY_ID}.p8
-          # altool looks here specifically.
-          cp ~/private_keys/AuthKey_${KEY_ID}.p8 ~/.appstoreconnect/private_keys/
+          python3 - <<'PY'
+          import base64, os, pathlib, re, sys
+
+          raw = os.environ["PRIVATE_KEY"]
+          raw = raw.replace("\\n", "\n")            # escaped newlines, if any
+          body = re.sub(r"-----[^-]+-----", "", raw)  # drop BEGIN/END if present
+          body = re.sub(r"\s+", "", body)             # collapse to pure base64
+
+          if not body:
+              sys.exit("::error::APP_STORE_CONNECT_PRIVATE_KEY has no key material")
+          try:
+              base64.b64decode(body, validate=True)
+          except Exception:
+              sys.exit("::error::APP_STORE_CONNECT_PRIVATE_KEY is not valid base64 — "
+                       "re-copy the whole .p8 file, including the BEGIN/END lines")
+
+          pem = "-----BEGIN PRIVATE KEY-----\n"
+          pem += "\n".join(body[i:i + 64] for i in range(0, len(body), 64))
+          pem += "\n-----END PRIVATE KEY-----\n"
+
+          path = pathlib.Path.home() / "private_keys" / f"AuthKey_{os.environ['KEY_ID']}.p8"
+          path.write_text(pem)
+          # altool looks in this exact directory.
+          (pathlib.Path.home() / ".appstoreconnect" / "private_keys" / path.name).write_text(pem)
+          # Shape only — never the contents.
+          print(f"Wrote {path.name}: {len(pem.splitlines())} lines, {len(body)} base64 chars")
+          PY
+
+          # Parse the key before handing it to xcodebuild. If this fails, the
+          # secret is wrong; if it passes and xcodebuild still complains, the
+          # problem is the credential (key ID / issuer / role), not the file.
+          openssl pkey -in ~/private_keys/AuthKey_${KEY_ID}.p8 -noout \
+            || { echo "::error::The .p8 is not a readable private key — re-create the App Store Connect API key"; exit 1; }
+          echo "Private key parses cleanly."
 
       - name: Archive
         env:
