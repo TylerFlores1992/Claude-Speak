@@ -1,4 +1,5 @@
 import Foundation
+@testable import PocketClaude
 
 /// A `URLProtocol` that answers every request from a closure, so the whole
 /// networking layer can be tested without a network.
