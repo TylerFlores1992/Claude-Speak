@@ -1,0 +1,170 @@
+name: iOS
+
+# Two jobs:
+#
+#   build  — compiles and runs the tests on every push. No signing, no secrets,
+#            no Apple account. This is the one that tells you the code is sound.
+#   ship   — archives, signs, and uploads to TestFlight. Manual only, so it
+#            never fires by accident and never burns minutes you didn't intend.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      upload_to_testflight:
+        description: "Archive and upload to TestFlight"
+        type: boolean
+        default: false
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build and test
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # The runner ships several Xcodes. Pick the newest 16.x rather than
+      # hardcoding a point release that will be replaced next month.
+      - name: Select Xcode
+        run: |
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_16*.app | sort -V | tail -1)"
+          xcodebuild -version
+
+      # Printed so a "destination not found" failure is diagnosable from the log
+      # instead of a guessing game.
+      - name: List available simulators
+        run: xcrun simctl list devices available
+
+      # No log prettifier — a raw xcodebuild log is ugly but it's the one thing
+      # that always works, and compiler errors are what we're here to read.
+      - name: Build and test
+        run: |
+          xcodebuild test \
+            -project PocketClaude.xcodeproj \
+            -scheme PocketClaude \
+            -destination 'platform=iOS Simulator,name=iPhone 16' \
+            -resultBundlePath TestResults.xcresult \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: TestResults.xcresult
+          retention-days: 7
+          if-no-files-found: ignore
+
+  ship:
+    name: Archive and upload to TestFlight
+    needs: build
+    if: github.event_name == 'workflow_dispatch' && inputs.upload_to_testflight
+    runs-on: macos-15
+    timeout-minutes: 45
+
+    env:
+      SCHEME: PocketClaude
+      PROJECT: PocketClaude.xcodeproj
+      BUNDLE_ID: com.tylerflores.pocketclaude
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_16*.app | sort -V | tail -1)"
+          xcodebuild -version
+
+      # The App Store Connect API key replaces an Apple ID + 2FA, which is the
+      # only practical way to authenticate from an unattended machine.
+      - name: Write App Store Connect API key
+        env:
+          KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
+        run: |
+          mkdir -p ~/private_keys ~/.appstoreconnect/private_keys
+          echo "$PRIVATE_KEY" > ~/private_keys/AuthKey_${KEY_ID}.p8
+          # altool looks here specifically.
+          cp ~/private_keys/AuthKey_${KEY_ID}.p8 ~/.appstoreconnect/private_keys/
+
+      - name: Archive
+        env:
+          KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -o pipefail
+          # github.run_number gives a build number that always increases, which
+          # is the rule App Store Connect enforces most often.
+          xcodebuild archive \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -destination 'generic/platform=iOS' \
+            -archivePath build/PocketClaude.xcarchive \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath ~/private_keys/AuthKey_${KEY_ID}.p8 \
+            -authenticationKeyID "$KEY_ID" \
+            -authenticationKeyIssuerID "$ISSUER_ID" \
+            DEVELOPMENT_TEAM="$TEAM_ID" \
+            CURRENT_PROJECT_VERSION=${{ github.run_number }}
+
+      - name: Export IPA
+        env:
+          KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          cat > build/ExportOptions.plist <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>app-store-connect</string>
+            <key>teamID</key>
+            <string>${TEAM_ID}</string>
+            <key>uploadSymbols</key>
+            <true/>
+            <key>destination</key>
+            <string>export</string>
+          </dict>
+          </plist>
+          PLIST
+
+          xcodebuild -exportArchive \
+            -archivePath build/PocketClaude.xcarchive \
+            -exportPath build/export \
+            -exportOptionsPlist build/ExportOptions.plist \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath ~/private_keys/AuthKey_${KEY_ID}.p8 \
+            -authenticationKeyID "$KEY_ID" \
+            -authenticationKeyIssuerID "$ISSUER_ID"
+
+      - name: Upload to TestFlight
+        env:
+          KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+        run: |
+          IPA="$(find build/export -name '*.ipa' | head -1)"
+          echo "Uploading $IPA"
+          xcrun altool --upload-app \
+            --type ios \
+            --file "$IPA" \
+            --apiKey "$KEY_ID" \
+            --apiIssuer "$ISSUER_ID"
+
+      - name: Upload IPA artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: PocketClaude-ipa
+          path: build/export/*.ipa
+          retention-days: 14
+          if-no-files-found: ignore
