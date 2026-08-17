@@ -155,19 +155,50 @@ jobs:
           TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -o pipefail
+          # CODE_SIGN_IDENTITY is what automatic signing reads to decide which
+          # kind of profile to mint. The iOS default is "Apple Development",
+          # which needs at least one registered device — and a CI runner has
+          # none. An App Store upload wants a distribution profile anyway, and
+          # those need no devices, so ask for one explicitly.
+          #
           # github.run_number gives a build number that always increases, which
           # is the rule App Store Connect enforces most often.
-          xcodebuild archive \
-            -project "$PROJECT" \
-            -scheme "$SCHEME" \
-            -destination 'generic/platform=iOS' \
-            -archivePath build/PocketClaude.xcarchive \
-            -allowProvisioningUpdates \
-            -authenticationKeyPath ~/private_keys/AuthKey_${KEY_ID}.p8 \
-            -authenticationKeyID "$KEY_ID" \
-            -authenticationKeyIssuerID "$ISSUER_ID" \
-            DEVELOPMENT_TEAM="$TEAM_ID" \
-            CURRENT_PROJECT_VERSION=${{ github.run_number }}
+          archive() {
+            xcodebuild archive \
+              -project "$PROJECT" \
+              -scheme "$SCHEME" \
+              -destination 'generic/platform=iOS' \
+              -archivePath build/PocketClaude.xcarchive \
+              -allowProvisioningUpdates \
+              -authenticationKeyPath ~/private_keys/AuthKey_${KEY_ID}.p8 \
+              -authenticationKeyID "$KEY_ID" \
+              -authenticationKeyIssuerID "$ISSUER_ID" \
+              DEVELOPMENT_TEAM="$TEAM_ID" \
+              CURRENT_PROJECT_VERSION=${{ github.run_number }} \
+              "$@"
+          }
+
+          # Fallback: archive without signing at all and let -exportArchive do
+          # it. Export knows it is producing an App Store build, so it resolves
+          # the distribution profile without any of the guesswork above. Costs a
+          # second archive, which is why it is the fallback and not the default.
+          if ! archive CODE_SIGN_STYLE=Automatic CODE_SIGN_IDENTITY="Apple Distribution"; then
+            echo "::warning::Signed archive failed; retrying unsigned and signing at export."
+            rm -rf build/PocketClaude.xcarchive
+            archive CODE_SIGNING_ALLOWED=NO
+          fi
+
+          # Which profile actually got embedded — the first thing worth knowing
+          # if the export step later disagrees about the signing type. Absent on
+          # the unsigned fallback path, which is expected.
+          PROFILE="build/PocketClaude.xcarchive/Products/Applications/PocketClaude.app/embedded.mobileprovision"
+          if [ -f "$PROFILE" ]; then
+            # `|| true` because pipefail is on and this is only diagnostics —
+            # a missing key here must not fail an otherwise good archive.
+            security cms -D -i "$PROFILE" \
+              | plutil -extract Name raw - 2>/dev/null \
+              | sed 's/^/Embedded profile: /' || true
+          fi
 
       - name: Export IPA
         env:

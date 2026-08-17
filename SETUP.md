@@ -210,6 +210,14 @@ builds.
 certificate and provisioning profile on the runner, so there's no `.p12` to
 export from a Mac you don't have.
 
+The archive passes `CODE_SIGN_IDENTITY="Apple Distribution"` deliberately.
+Automatic signing reads that setting to decide which kind of profile to mint,
+and the iOS default (`Apple Development`) needs at least one **registered
+device** — which a CI runner doesn't have, and which you can't easily add
+without a Mac. A distribution profile needs no devices, and it's what an upload
+wants anyway. If that still fails, the step retries with `CODE_SIGNING_ALLOWED=NO`
+and lets `-exportArchive` do the signing instead.
+
 Note macOS runners consume Actions minutes at **10×**, so a free-tier private
 repo gets roughly 200 macOS minutes a month. If that bites, change the `build`
 job's `on:` to only run on `main` and pull requests.
