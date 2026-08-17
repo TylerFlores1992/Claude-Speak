@@ -576,7 +576,7 @@ final class ConversationViewModel: ObservableObject {
         if !session.isEmpty {
             summaries.insert(SessionSummary(session), at: 0)
         }
-        return summaries.sorted { $0.updatedAt > $1.updatedAt }
+        return summaries.sorted(by: SessionSummary.newestFirst)
     }
 
     /// Opens a previous conversation, saving the current one first.

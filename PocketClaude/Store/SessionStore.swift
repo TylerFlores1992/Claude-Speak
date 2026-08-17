@@ -92,6 +92,19 @@ struct SessionSummary: Identifiable, Equatable, Sendable {
         // than widening the way a single substring match would.
         return trimmed.split(separator: " ").allSatisfy { searchIndex.contains($0) }
     }
+
+    /// Newest first, with a total ordering.
+    ///
+    /// `updatedAt` alone is not enough: two sessions saved in the same
+    /// millisecond compare equal, and `sorted(by:)` is not stable, so the list
+    /// could come back in a different order each time it was opened. Falling
+    /// through to `startedAt` and then the id makes the order defined for any
+    /// pair of sessions.
+    static func newestFirst(_ lhs: SessionSummary, _ rhs: SessionSummary) -> Bool {
+        if lhs.updatedAt != rhs.updatedAt { return lhs.updatedAt > rhs.updatedAt }
+        if lhs.startedAt != rhs.startedAt { return lhs.startedAt > rhs.startedAt }
+        return lhs.id.uuidString > rhs.id.uuidString
+    }
 }
 
 /// Saves conversations so closing the app — or starting a new session — doesn't
@@ -130,7 +143,7 @@ struct SessionStore {
     func summaries() -> [SessionSummary] {
         allSessions()
             .map(SessionSummary.init)
-            .sorted { $0.updatedAt > $1.updatedAt }
+            .sorted(by: SessionSummary.newestFirst)
     }
 
     func load(id: UUID) -> Session? {

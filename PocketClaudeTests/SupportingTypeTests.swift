@@ -98,8 +98,9 @@ final class SessionStoreTests: XCTestCase {
         super.tearDown()
     }
 
-    private func makeSession(question: String) -> Session {
+    private func makeSession(question: String, startedAt: Date = Date()) -> Session {
         var session = Session()
+        session.startedAt = startedAt
         session.messages = [.userText(question)]
         session.transcript = [TranscriptEntry(kind: .user, text: question)]
         return session
@@ -164,12 +165,30 @@ final class SessionStoreTests: XCTestCase {
     }
 
     func testSummariesAreNewestFirst() {
+        // Explicit start dates: two saves can land in the same millisecond, so
+        // `updatedAt` alone would leave the order genuinely undefined.
         let store = SessionStore(directory: directory)
-        store.save(makeSession(question: "older"))
-        store.save(makeSession(question: "newer"))
+        store.save(makeSession(question: "older", startedAt: Date(timeIntervalSince1970: 1_000)))
+        store.save(makeSession(question: "newer", startedAt: Date(timeIntervalSince1970: 2_000)))
 
         let titles = store.summaries().map(\.title)
         XCTAssertEqual(titles.first, "newer")
+        XCTAssertEqual(titles.last, "older")
+    }
+
+    func testOrderingIsTotalWhenTimestampsCollide() {
+        // Regression: `sorted(by:)` is not stable, so equal timestamps used to
+        // let the list come back in a different order each time it was opened.
+        let shared = Date(timeIntervalSince1970: 5_000)
+        var a = makeSession(question: "a", startedAt: shared)
+        var b = makeSession(question: "b", startedAt: shared)
+        a.updatedAt = shared
+        b.updatedAt = shared
+
+        let first = [SessionSummary(a), SessionSummary(b)].sorted(by: SessionSummary.newestFirst)
+        let second = [SessionSummary(b), SessionSummary(a)].sorted(by: SessionSummary.newestFirst)
+
+        XCTAssertEqual(first.map(\.id), second.map(\.id))
     }
 
     func testTitleComesFromTheFirstQuestion() {
