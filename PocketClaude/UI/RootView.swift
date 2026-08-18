@@ -45,6 +45,18 @@ struct RootView: View {
         .onChange(of: viewModel.session.id) { _, _ in
             if path.isEmpty { path = [.conversation] }
         }
+        .onOpenURL { url in
+            // Refused rather than half-applied: settings pointing at a relay
+            // with the wrong token read as "the relay is broken".
+            guard let pairing = PairingLink(url) else {
+                viewModel.errorMessage = "That pairing link isn't complete. Copy the whole pocketclaude:// line the relay printed."
+                return
+            }
+            settings.backend = .relay
+            settings.relayURLString = pairing.relayURL
+            KeychainStore.set(pairing.token, for: .relayToken)
+            viewModel.errorMessage = "Paired with \(pairing.relayURL)."
+        }
         .sheet(isPresented: $viewModel.isShowingSettings) {
             SettingsView(settings: settings)
         }

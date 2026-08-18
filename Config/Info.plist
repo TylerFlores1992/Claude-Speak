@@ -60,6 +60,21 @@
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>PocketClaude converts what you say into text. On-device recognition is used when your language supports it.</string>
 
+	<!-- Pairing. The relay prints pocketclaude://pair?url=…&token=… when it
+	     starts; tapping that link fills in Settings in one go instead of you
+	     transcribing a 64-character token into a phone. -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.tylerflores.pocketclaude.pair</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>pocketclaude</string>
+			</array>
+		</dict>
+	</array>
+
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UISupportedInterfaceOrientations</key>

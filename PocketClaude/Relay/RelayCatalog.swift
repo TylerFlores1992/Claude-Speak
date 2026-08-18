@@ -67,6 +67,39 @@ extension RelayClient {
         }
     }
 
+    /// Pulls new relay code and restarts it, when a supervisor is running.
+    ///
+    /// Returns what git said. `changed` is false when already current, which is
+    /// worth distinguishing: "nothing to do" and "updated" both succeed, and
+    /// only one of them drops the connection.
+    func update() async throws -> (message: String, changed: Bool) {
+        guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
+            throw RelayError.invalidURL(baseURL.absoluteString)
+        }
+        components.path = components.path.hasSuffix("/")
+            ? components.path + "update"
+            : components.path + "/update"
+        guard let url = components.url else { throw RelayError.invalidURL(baseURL.absoluteString) }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = 60
+
+        let (data, response) = try await session.data(for: request)
+        let json = (try? JSONDecoder().decode(JSONValue.self, from: data)) ?? .object([:])
+        if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+            throw RelayError.relay(json["error"]?.stringValue ?? "Update failed (HTTP \(http.statusCode)).")
+        }
+        let changed = json["changed"]?.boolValue ?? false
+        let before = json["before"]?.stringValue ?? "?"
+        let after = json["after"]?.stringValue ?? "?"
+        return (
+            changed ? "Updated \(before) → \(after). The relay is restarting." : "Already up to date (\(after)).",
+            changed
+        )
+    }
+
     /// Shared plumbing for the two read-only endpoints.
     private func getJSON(path: String) async throws -> JSONValue {
         guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
