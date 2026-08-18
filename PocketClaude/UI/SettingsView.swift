@@ -296,7 +296,7 @@ struct SettingsView: View {
         } header: {
             Text("Voice in")
         } footer: {
-            Text("iOS gives apps no direct access to AirPods gestures. Stem-press support works by claiming the Now Playing slot and reading the play/pause command a squeeze produces — so it stops working the moment another app (music, podcasts) takes that slot, and resumes after PocketClaude next speaks. On-device recognition keeps audio off Apple's servers and works with no signal, where the locale supports it. Hands-free mode keeps the microphone open while the app is in the foreground and sends when it hears your end keyword — it drains the battery noticeably and stops when the app is backgrounded.")
+            Text("iOS gives apps no direct access to AirPods gestures. Stem press works by holding the Now Playing slot and reading the play/pause command a squeeze produces. Only one app can hold that slot, so while this is on it plays silence to keep it — which means you can't listen to music or a podcast on the same device, and it uses battery. Switch it off when you want your music back. On-device recognition keeps audio off Apple's servers and works with no signal, where the locale supports it. Hands-free mode keeps the microphone open while the app is in the foreground and sends when it hears your end keyword — it drains the battery noticeably and stops when the app is backgrounded.")
         }
     }
 

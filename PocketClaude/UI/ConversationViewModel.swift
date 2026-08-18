@@ -25,7 +25,14 @@ final class ConversationViewModel: ObservableObject {
 
     // MARK: - Published state
 
-    @Published private(set) var state: State = .idle
+    @Published private(set) var state: State = .idle {
+        didSet {
+            // Recording switches the session to `.playAndRecord`, which stops
+            // the silent loop — and losing it means the *next* squeeze goes to
+            // Music instead of here. Restart whenever we come back to rest.
+            if case .idle = state { nowPlaying.resumeIfNeeded() }
+        }
+    }
     @Published private(set) var session: Session
     @Published private(set) var liveTranscript: String = ""
     @Published var errorMessage: String?
@@ -37,6 +44,9 @@ final class ConversationViewModel: ObservableObject {
     let recognizer: SpeechRecognizerService
     let speech: SpeechService
     private let remoteCommands = RemoteCommandController()
+    /// Keeps the Now Playing slot while stem control is on, so a squeeze
+    /// reaches this app instead of Music.
+    private let nowPlaying = NowPlayingKeeper()
 
     private let store: SessionStore
     private var anthropic = AnthropicClient()
@@ -96,14 +106,15 @@ final class ConversationViewModel: ObservableObject {
     func applyStemPressSetting() {
         guard settings.stemPressControl else {
             remoteCommands.disable()
+            nowPlaying.stop()
             return
         }
-        // Take the Now Playing slot straight away rather than waiting for the
-        // first answer to be spoken. Without this the first squeeze of a
-        // session is swallowed, because iOS delivers the press only to the app
-        // that currently holds the slot.
-        speech.primeNowPlaying()
-        remoteCommands.publishNowPlaying(title: "PocketClaude", isPlaying: false)
+        // Hold the Now Playing slot for as long as stem control is on. iOS
+        // delivers the press only to the app holding that slot, and the slot
+        // belongs to whoever is *playing* — Music keeps it even while paused,
+        // so claiming it once and stopping handed it straight back.
+        nowPlaying.start()
+        remoteCommands.publishNowPlaying(title: "PocketClaude", isPlaying: true)
 
         remoteCommands.onTogglePressed = { [weak self] in
             guard let self else { return }
