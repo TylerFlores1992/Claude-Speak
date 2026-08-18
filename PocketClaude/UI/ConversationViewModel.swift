@@ -308,6 +308,50 @@ final class ConversationViewModel: ObservableObject {
 
     // MARK: - Sending a turn
 
+    // MARK: - Relay catalog
+
+    /// Which workspace a new question runs in. Empty means the relay's
+    /// configured repository.
+    @Published var activeProject: String = ""
+
+    /// Sessions and workspaces from the relay, for the dashboard.
+    func relayCatalog() async throws -> ([RelaySession], [RelayProject]) {
+        guard let client = RelayClient.make(settings: settings) else {
+            throw RelayError.notConfigured
+        }
+        async let sessions = client.sessions()
+        async let projects = client.projects()
+        return try await (sessions, projects)
+    }
+
+    /// Picks up a Claude Code session that already exists on the relay machine,
+    /// including one started at the keyboard.
+    ///
+    /// The transcript starts empty because the CLI's history isn't ours to
+    /// replay — but `--resume` means the agent still has it, so the first
+    /// question can refer to what was said before.
+    func resume(_ session: RelaySession) {
+        store.save(self.session)
+        var resumed = Session(model: settings.model.rawValue)
+        resumed.relaySessionID = session.id
+        self.session = resumed
+        activeProject = session.isChat ? "Chat" : session.project
+        append(.init(
+            kind: .status,
+            text: "Continuing “\(session.title)” in \(session.project). The agent still has the earlier context."
+        ))
+        state = .idle
+    }
+
+    /// Starts a fresh session in a named workspace.
+    func startSession(inProject project: String) {
+        store.save(session)
+        session = Session(model: settings.model.rawValue)
+        activeProject = project
+        append(.init(kind: .status, text: "New session in \(project)."))
+        state = .idle
+    }
+
     /// Answers a question that arrived from the Apple Watch.
     ///
     /// Deliberately routed through `send` rather than talking to the relay
@@ -360,7 +404,8 @@ final class ConversationViewModel: ObservableObject {
         do {
             let result = try await client.ask(
                 text: text,
-                sessionID: session.relaySessionID
+                sessionID: session.relaySessionID,
+                project: activeProject
             ) { [weak self] event in
                 self?.handleRelay(event, streaming: streaming)
             }

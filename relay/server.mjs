@@ -41,7 +41,7 @@ const EXTRA_PROJECTS = process.env.RELAY_PROJECTS ?? "";
 // A directory with no code in it, for thinking out loud rather than asking
 // about a repository. `claude -p` runs anywhere; it only reads code if there
 // is code to read, so an empty directory is all a general conversation needs.
-const SCRATCH = process.env.RELAY_SCRATCH ?? join(homedir(), "pocketclaude-ideas");
+const SCRATCH = process.env.RELAY_SCRATCH ?? join(homedir(), "pocketclaude-chat");
 
 /// True only when this file is the program being run, so `import` from the test
 /// suite gets the functions without starting a listener or exiting on config.
@@ -54,7 +54,7 @@ const SCRATCH = process.env.RELAY_SCRATCH ?? join(homedir(), "pocketclaude-ideas
 function projects() {
   const list = [
     { name: basename(REPO) || "repo", path: REPO, kind: "code" },
-    { name: "Ideas", path: SCRATCH, kind: "scratch" },
+    { name: "Chat", path: SCRATCH, kind: "scratch" },
   ];
   for (const pair of EXTRA_PROJECTS.split(",")) {
     const [name, path] = pair.split("=").map((part) => part?.trim());

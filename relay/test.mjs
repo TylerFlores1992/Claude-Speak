@@ -383,7 +383,7 @@ test("an unreadable file is listed rather than crashing the endpoint", () => {
 
 test("the configured repo and a scratch workspace are always offered", () => {
   const names = projects().map((p) => p.name.toLowerCase());
-  assert.ok(names.includes("ideas"), "expected a scratch workspace");
+  assert.ok(names.includes("chat"), "expected a scratch workspace");
   assert.equal(new Set(names).size, names.length, "names must be unique");
 });
 
