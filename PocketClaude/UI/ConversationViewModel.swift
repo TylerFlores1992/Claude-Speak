@@ -198,6 +198,12 @@ final class ConversationViewModel: ObservableObject {
             }
 
             guard !text.isEmpty else {
+                // Never end a take in silence. Going idle with nothing to show
+                // is indistinguishable from the app ignoring you, and that is
+                // exactly what it looked like on device: the words appeared,
+                // then vanished, then nothing.
+                errorMessage = recognizer.lastError
+                    ?? "Didn't catch that — the microphone stopped before anything was recognised."
                 state = .idle
                 return
             }
