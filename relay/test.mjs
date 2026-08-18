@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { buildArgs, interpret, readHead } from "./server.mjs";
+import { buildArgs, interpret, readHead, projects, resolveProject } from "./server.mjs";
 
 const SERVER = fileURLToPath(new URL("./server.mjs", import.meta.url));
 let failures = 0;
@@ -374,6 +374,32 @@ test("an unreadable file is listed rather than crashing the endpoint", () => {
   const head = readHead(join(tmpdir(), "definitely-not-here-", String(Date.now()), "x.jsonl"));
   assert.equal(head.title, "Untitled session");
   assert.equal(head.cwd, null);
+});
+
+// --- Workspaces ------------------------------------------------------------
+// A session can run somewhere other than the configured repository — including
+// a scratch directory, for thinking out loud rather than asking about code.
+// The set of places is an allowlist, not a path from the request.
+
+test("the configured repo and a scratch workspace are always offered", () => {
+  const names = projects().map((p) => p.name.toLowerCase());
+  assert.ok(names.includes("ideas"), "expected a scratch workspace");
+  assert.equal(new Set(names).size, names.length, "names must be unique");
+});
+
+test("an unknown project is refused", () => {
+  assert.equal(resolveProject("no-such-project"), null);
+});
+
+test("a path cannot be smuggled in as a project name", () => {
+  // The request names a workspace; it never supplies a directory.
+  for (const attempt of ["../../etc", "/etc", "C:\\Windows", "..\\..\\secrets"]) {
+    assert.equal(resolveProject(attempt), null, `should refuse ${attempt}`);
+  }
+});
+
+test("no project means the configured repository", () => {
+  assert.equal(resolveProject(""), process.env.RELAY_REPO ?? process.cwd());
 });
 
 console.log(failures === 0 ? "\nall relay tests passed" : `\n${failures} failing`);

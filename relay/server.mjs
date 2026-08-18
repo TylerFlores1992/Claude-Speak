@@ -15,7 +15,8 @@ import { createServer } from "node:http";
 import { timingSafeEqual } from "node:crypto";
 import { existsSync, readdirSync, realpathSync, openSync, readSync, closeSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { mkdirSync } from "node:fs";
+import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const PORT = Number(process.env.RELAY_PORT ?? 8787);
@@ -34,8 +35,58 @@ const TIMEOUT_MS = Number(process.env.RELAY_TIMEOUT_MS ?? 300_000);
 const PERMISSION_MODE = process.env.RELAY_PERMISSION_MODE ?? "dontAsk";
 const ALLOWED_TOOLS = process.env.RELAY_ALLOWED_TOOLS ?? "";
 
+// Extra places a session can run, as "name=path" pairs separated by commas:
+//     RELAY_PROJECTS="camphawk=C:\\code\\campsite-finder,notes=C:\\code\\notes"
+const EXTRA_PROJECTS = process.env.RELAY_PROJECTS ?? "";
+// A directory with no code in it, for thinking out loud rather than asking
+// about a repository. `claude -p` runs anywhere; it only reads code if there
+// is code to read, so an empty directory is all a general conversation needs.
+const SCRATCH = process.env.RELAY_SCRATCH ?? join(homedir(), "pocketclaude-ideas");
+
 /// True only when this file is the program being run, so `import` from the test
 /// suite gets the functions without starting a listener or exiting on config.
+/**
+ * Where a session may run. An allowlist rather than a path from the request:
+ * the token is the only thing between the internet and this process, and
+ * "spawn a CLI in any directory you name" is not a thing to hand out on the
+ * strength of one bearer token.
+ */
+function projects() {
+  const list = [
+    { name: basename(REPO) || "repo", path: REPO, kind: "code" },
+    { name: "Ideas", path: SCRATCH, kind: "scratch" },
+  ];
+  for (const pair of EXTRA_PROJECTS.split(",")) {
+    const [name, path] = pair.split("=").map((part) => part?.trim());
+    if (name && path) list.push({ name, path, kind: "code" });
+  }
+  // First definition of a name wins, so RELAY_REPO can't be shadowed.
+  const seen = new Set();
+  return list.filter((entry) => {
+    const key = entry.name.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+/** The directory for a requested project name, or null if it isn't allowed. */
+function resolveProject(name) {
+  if (!name) return REPO;
+  const match = projects().find((p) => p.name.toLowerCase() === String(name).toLowerCase());
+  if (!match) return null;
+  // Created on demand: asking for the scratch workspace shouldn't require
+  // having made a folder first.
+  if (match.kind === "scratch" && !existsSync(match.path)) {
+    try {
+      mkdirSync(match.path, { recursive: true });
+    } catch {
+      return null;
+    }
+  }
+  return existsSync(match.path) ? match.path : null;
+}
+
 function isEntryPoint() {
   if (!process.argv[1]) return false;
   try {
@@ -158,6 +209,7 @@ async function handleAsk(req, res) {
   }
 
   const text = typeof payload.text === "string" ? payload.text.trim() : "";
+  const project = typeof payload.project === "string" ? payload.project.trim() : "";
   const sessionId = typeof payload.sessionId === "string" && payload.sessionId
     ? payload.sessionId
     : null;
@@ -165,6 +217,15 @@ async function handleAsk(req, res) {
   if (!text) {
     res.writeHead(400, { "content-type": "application/json" });
     res.end(JSON.stringify({ error: "text is required" }));
+    return;
+  }
+
+  // Rejected before the stream opens, so a bad project name is an ordinary
+  // HTTP error rather than an error frame the phone has to unpick.
+  const workingDirectory = resolveProject(project);
+  if (!workingDirectory) {
+    res.writeHead(400, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: `unknown project: ${project}` }));
     return;
   }
 
@@ -178,7 +239,7 @@ async function handleAsk(req, res) {
   });
 
   const child = spawn(CLAUDE_BIN, buildArgs({ text, sessionId }), {
-    cwd: REPO,
+    cwd: workingDirectory,
     // Inherit the environment so the CLI finds your logged-in credentials.
     env: process.env,
     stdio: ["ignore", "pipe", "pipe"],
@@ -370,6 +431,14 @@ const server = createServer((req, res) => {
     return;
   }
 
+  if (req.method === "GET" && req.url === "/projects") {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      projects: projects().map((p) => ({ ...p, available: existsSync(p.path) || p.kind === "scratch" })),
+    }));
+    return;
+  }
+
   if (req.method === "GET" && req.url === "/sessions") {
     try {
       res.writeHead(200, { "content-type": "application/json" });
@@ -420,4 +489,4 @@ if (isEntryPoint()) {
 }
 
 // Exported for the test script; importing this file starts nothing.
-export { interpret, buildArgs, readHead, listSessions };
+export { interpret, buildArgs, readHead, listSessions, projects, resolveProject };
