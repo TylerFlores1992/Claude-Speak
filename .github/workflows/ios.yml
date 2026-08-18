@@ -1,15 +1,25 @@
 name: iOS
 
-# Two jobs:
+# Three jobs:
 #
-#   build  — compiles and runs the tests on every push. No signing, no secrets,
-#            no Apple account. This is the one that tells you the code is sound.
+#   relay  — runs the Node relay tests on Ubuntu. Cheap, and until now the only
+#            part of the system with no CI at all.
+#   build  — compiles and runs the iOS tests. No signing, no secrets, no Apple
+#            account. This is the one that tells you the app code is sound.
 #   ship   — archives, signs, and uploads to TestFlight. Manual only, so it
 #            never fires by accident and never burns minutes you didn't intend.
+#
+# `push` is limited to main rather than "**". Every change goes through a pull
+# request, so building on both events meant every commit ran the macOS job
+# twice — which is what exhausted a month of Actions minutes in a day, since
+# macOS runners bill at a 10x multiplier. Branch work is now covered by the
+# pull_request run, and main is covered after merge.
 on:
   push:
-    branches: ["**"]
+    branches: [main]
+    paths-ignore: ["**/*.md", ".gitignore"]
   pull_request:
+    paths-ignore: ["**/*.md", ".gitignore"]
   workflow_dispatch:
     inputs:
       upload_to_testflight:
@@ -22,6 +32,22 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Ubuntu, not macOS: the relay is a Node script and has no business costing
+  # 10x. These 19 tests cover the SSE framing and the stream-json interpreter —
+  # the layer that silently dropped every answer until it was fixed.
+  relay:
+    name: Relay tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Run relay tests
+        run: node relay/test.mjs
+
   build:
     name: Build and test
     runs-on: macos-26
