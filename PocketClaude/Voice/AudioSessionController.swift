@@ -19,14 +19,7 @@ enum AudioSessionController {
         try session.setCategory(
             .playAndRecord,
             mode: .default,
-            // Deliberately the same options as
-            // `configureForHoldingNowPlayingWithMic`. When stem press is on the
-            // session is already in exactly this configuration, so this call
-            // changes nothing and there is no route renegotiation to race with
-            // — which is the entire point. `.duckOthers` is gone because the
-            // Now Playing loop has already taken the audio route; there is
-            // nothing left to duck.
-            options: [.allowBluetooth, .defaultToSpeaker]
+            options: [.allowBluetooth, .duckOthers, .defaultToSpeaker]
         )
         try session.setActive(true, options: [])
     }
@@ -39,30 +32,6 @@ enum AudioSessionController {
             // ducks other audio and behaves well with CarPlay.
             mode: .spokenAudio,
             options: [.allowBluetoothA2DP, .duckOthers]
-        )
-        try session.setActive(true, options: [])
-    }
-
-    /// For holding the Now Playing slot *while the microphone must stay
-    /// reachable* — that is, whenever stem-press control is on.
-    ///
-    /// `.playAndRecord` rather than `.playback`, even though nothing is being
-    /// recorded yet. A backgrounded app on a locked device cannot newly acquire
-    /// the microphone: switching into `.playAndRecord` at press time failed
-    /// with CoreAudio's `'what'` error (2003329396) every time the screen was
-    /// locked, while the identical code worked in the foreground. Being in a
-    /// record-capable category already means there is no acquisition to make.
-    ///
-    /// The cost is real: `.playAndRecord` on a Bluetooth headset forces the
-    /// low-quality HFP path, so answers spoken while this is active sound like
-    /// a phone call. `configureForPlayback` is still used for speaking, which
-    /// switches back to the good path for the part you actually listen to.
-    static func configureForHoldingNowPlayingWithMic() throws {
-        let session = AVAudioSession.sharedInstance()
-        try session.setCategory(
-            .playAndRecord,
-            mode: .default,
-            options: [.allowBluetooth, .defaultToSpeaker]
         )
         try session.setActive(true, options: [])
     }
