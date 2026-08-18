@@ -36,6 +36,28 @@ enum AudioSessionController {
         try session.setActive(true, options: [])
     }
 
+    /// For holding the Now Playing slot with `NowPlayingKeeper`.
+    ///
+    /// Deliberately *not* `.duckOthers`. Ducking means mixing — our audio plays
+    /// alongside Music with Music turned down — and a mixing app never becomes
+    /// the Now Playing app. That was the bug: the silent loop politely ducked
+    /// Music while Music kept the slot, and the stem press with it. Taking the
+    /// slot requires interrupting other audio, which is what the default
+    /// (non-mixing) `.playback` behaviour does.
+    ///
+    /// `.default` rather than `.spokenAudio` for the same reason: `.spokenAudio`
+    /// is tuned to yield politely around other players, which is right for
+    /// reading an answer and wrong for holding a slot.
+    static func configureForHoldingNowPlaying() throws {
+        let session = AVAudioSession.sharedInstance()
+        try session.setCategory(
+            .playback,
+            mode: .default,
+            options: [.allowBluetoothA2DP]
+        )
+        try session.setActive(true, options: [])
+    }
+
     /// Hand the audio route back to whatever was playing before us.
     static func deactivate() {
         try? AVAudioSession.sharedInstance().setActive(

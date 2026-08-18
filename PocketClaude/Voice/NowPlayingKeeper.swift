@@ -26,7 +26,7 @@ final class NowPlayingKeeper {
     /// Begin holding the slot. Safe to call repeatedly.
     func start() {
         guard player == nil else { return resumeIfNeeded() }
-        try? AudioSessionController.configureForPlayback()
+        try? AudioSessionController.configureForHoldingNowPlaying()
         guard let player = try? AVAudioPlayer(data: NowPlayingKeeper.silentWAV()) else { return }
         // -1 loops forever. Volume 0 because nobody wants to hear this; the
         // slot is held by the fact that playback is running, not by its level.
@@ -47,9 +47,12 @@ final class NowPlayingKeeper {
     /// rest so the slot isn't quietly lost after the first question.
     func resumeIfNeeded() {
         guard let player else { return }
-        guard !player.isPlaying else { return }
-        try? AudioSessionController.configureForPlayback()
-        player.play()
+        // Re-assert the category even when the loop is still running. Speaking
+        // an answer switches the session to a ducking configuration, and a
+        // ducking session hands the Now Playing slot straight back to Music —
+        // so the stem would work for exactly one question and then stop.
+        try? AudioSessionController.configureForHoldingNowPlaying()
+        if !player.isPlaying { player.play() }
     }
 
     // MARK: - Silence
