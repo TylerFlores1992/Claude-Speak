@@ -158,12 +158,24 @@ struct SettingsView: View {
                     .textInputAutocapitalization(.never)
 
                 Button("Save") {
-                    KeychainStore.set(text.wrappedValue, for: key)
+                    // Trim before storing. Pasting a token from Mail or Notes
+                    // routinely brings a trailing space or newline with it, and
+                    // every consumer of these compares bytes exactly — the relay
+                    // uses timingSafeEqual, so one invisible character reads as
+                    // a wrong token and you get a 401 with nothing to see.
+                    let cleaned = text.wrappedValue
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !cleaned.isEmpty else { return }
+                    KeychainStore.set(cleaned, for: key)
                     text.wrappedValue = ""
                     savedNotice = "\(title) saved to the Keychain."
                 }
                 .buttonStyle(.bordered)
-                .disabled(text.wrappedValue.isEmpty)
+                .disabled(
+                    text.wrappedValue
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                        .isEmpty
+                )
 
                 if KeychainStore.has(key) {
                     Button(role: .destructive) {
