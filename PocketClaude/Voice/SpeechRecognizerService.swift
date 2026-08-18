@@ -160,7 +160,20 @@ final class SpeechRecognizerService: NSObject, ObservableObject {
         }
 
         audioEngine.prepare()
-        try audioEngine.start()
+
+        // Retry once. Starting the engine can fail with CoreAudio's generic
+        // 'what' error (2003329396) when the route is still in flux — which is
+        // what happens with the screen locked, where the switch to recording
+        // takes longer than it does in the foreground. A second attempt a
+        // moment later usually succeeds, and costs nothing when the first one
+        // works.
+        do {
+            try audioEngine.start()
+        } catch {
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            audioEngine.prepare()
+            try audioEngine.start()
+        }
         isRecording = true
     }
 

@@ -249,9 +249,13 @@ struct SettingsView: View {
 
             if settings.voiceEngine == .system {
                 Picker("Voice", selection: $settings.systemVoiceIdentifier) {
-                    Text("Default").tag("")
+                    Text("Best available").tag("")
+                    // Quality is the thing that matters here and it isn't
+                    // guessable from the name — Samantha exists at three
+                    // different qualities that sound nothing alike.
                     ForEach(SpeechService.availableVoices(), id: \.identifier) { voice in
-                        Text("\(voice.name) (\(voice.language))").tag(voice.identifier)
+                        Text("\(voice.name) — \(SpeechService.qualityLabel(voice))")
+                            .tag(voice.identifier)
                     }
                 }
             } else {
@@ -277,7 +281,7 @@ struct SettingsView: View {
         } header: {
             Text("Voice out")
         } footer: {
-            Text("The system voice is free and works offline. ElevenLabs sounds better and costs money per character; if a request fails, the app falls back to the system voice rather than going silent.")
+            Text("iOS ships only Default-quality voices, which sound robotic. Download better ones in iOS Settings → Accessibility → Spoken Content → Voices → English — the Premium voices are a large improvement and cost nothing. They appear in the list above once downloaded. ElevenLabs sounds better still and costs money per character; if a request fails, the app falls back to a system voice rather than going silent.")
         }
     }
 

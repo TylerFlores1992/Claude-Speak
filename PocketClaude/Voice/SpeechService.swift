@@ -155,7 +155,9 @@ final class SpeechService: NSObject, ObservableObject {
            let voice = AVSpeechSynthesisVoice(identifier: streamVoiceIdentifier) {
             utterance.voice = voice
         } else {
-            utterance.voice = AVSpeechSynthesisVoice(language: "en-US")
+            // Best installed voice, not the plain en-US one, which is the
+            // flat default-quality voice.
+            utterance.voice = SpeechService.bestAvailableVoice()
         }
         utterance.rate = Float(streamRate)
         // A short gap between sentences sounds like reading rather than a
@@ -192,7 +194,9 @@ final class SpeechService: NSObject, ObservableObject {
            let voice = AVSpeechSynthesisVoice(identifier: voiceIdentifier) {
             utterance.voice = voice
         } else {
-            utterance.voice = AVSpeechSynthesisVoice(language: "en-US")
+            // Best installed voice, not the plain en-US one, which is the
+            // flat default-quality voice.
+            utterance.voice = SpeechService.bestAvailableVoice()
         }
         // AVSpeechUtteranceDefaultSpeechRate is ~0.5; the UI slider maps 0.4–0.7.
         utterance.rate = Float(rate)
@@ -220,6 +224,34 @@ final class SpeechService: NSObject, ObservableObject {
                 }
                 return lhs.name < rhs.name
             }
+    }
+
+    /// The best-sounding installed English voice.
+    ///
+    /// Used when no voice has been chosen. The old fallback was
+    /// `AVSpeechSynthesisVoice(language: "en-US")`, which returns the *default
+    /// quality* system voice — the flat, robotic one. If a Premium or Enhanced
+    /// voice is installed, picking it costs nothing and sounds like a different
+    /// product.
+    ///
+    /// Prefers en-US among equals purely so the default is stable rather than
+    /// dependent on what happens to sort first.
+    static func bestAvailableVoice() -> AVSpeechSynthesisVoice? {
+        let voices = availableVoices()
+        guard let best = voices.first else {
+            return AVSpeechSynthesisVoice(language: "en-US")
+        }
+        let sameQuality = voices.filter { $0.quality == best.quality }
+        return sameQuality.first { $0.language == "en-US" } ?? best
+    }
+
+    /// "Premium", "Enhanced" or "Default", for the picker.
+    static func qualityLabel(_ voice: AVSpeechSynthesisVoice) -> String {
+        switch voice.quality {
+        case .premium: return "Premium"
+        case .enhanced: return "Enhanced"
+        default: return "Default"
+        }
     }
 }
 

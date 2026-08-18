@@ -170,6 +170,9 @@ final class ConversationViewModel: ObservableObject {
                     return
                 }
                 self.nowPlaying.resume(reassertCategory: false)
+                // Only now is the microphone actually open. Cueing on the
+                // button press instead would be a lie you'd talk over.
+                Cues.listening()
                 self.observeLiveTranscript()
             } catch {
                 self.nowPlaying.resume(reassertCategory: true)
@@ -183,6 +186,7 @@ final class ConversationViewModel: ObservableObject {
 
     func endListening() {
         guard case .listening = state else { return }
+        Cues.stoppedListening()
         Task {
             let text = await recognizer.stopAndAwaitTranscript()
             liveTranscript = ""
