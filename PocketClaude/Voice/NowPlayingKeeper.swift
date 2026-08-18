@@ -58,7 +58,10 @@ final class NowPlayingKeeper {
     ///
     /// Generated rather than bundled so there's no binary asset in the repo to
     /// take on trust — the whole file is 44 bytes of header and zeroes.
-    static func silentWAV() -> Data {
+    /// `nonisolated` because it touches no actor state — it just builds bytes.
+    /// Without it the whole class's `@MainActor` would apply, and the tests
+    /// could not call it from a synchronous context.
+    nonisolated static func silentWAV() -> Data {
         let sampleRate: UInt32 = 8_000
         let channels: UInt16 = 1
         let bitsPerSample: UInt16 = 16
