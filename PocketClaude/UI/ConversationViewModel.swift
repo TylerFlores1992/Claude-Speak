@@ -151,16 +151,33 @@ final class ConversationViewModel: ObservableObject {
         // which aborted the process inside `installTapOnBus:`. It restarts
         // below, once the microphone is live, so the slot is never given up.
         nowPlaying.suspend()
-        do {
-            try recognizer.start(preferOnDevice: settings.preferOnDeviceRecognition)
-            nowPlaying.resume(reassertCategory: false)
-            state = .listening
-            observeLiveTranscript()
-        } catch {
-            nowPlaying.resume(reassertCategory: true)
-            errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-            // Don't drop a pending confirmation on the floor if the mic failed.
-            state = pendingConfirmationPrompt.map(State.awaitingConfirmation) ?? .idle
+        // `.listening` immediately, before the microphone is actually open, so
+        // a second squeeze arriving during the quarter-second the route needs
+        // to settle doesn't start a second take on top of the first.
+        state = .listening
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.recognizer.start(
+                    preferOnDevice: self.settings.preferOnDeviceRecognition
+                )
+                // The take may have been ended while the route was settling.
+                // Without this the microphone would stay open with the app
+                // showing idle.
+                guard case .listening = self.state else {
+                    self.recognizer.cancel()
+                    self.nowPlaying.resume(reassertCategory: true)
+                    return
+                }
+                self.nowPlaying.resume(reassertCategory: false)
+                self.observeLiveTranscript()
+            } catch {
+                self.nowPlaying.resume(reassertCategory: true)
+                self.errorMessage = (error as? LocalizedError)?.errorDescription
+                    ?? error.localizedDescription
+                // Don't drop a pending confirmation on the floor if the mic failed.
+                self.state = self.pendingConfirmationPrompt.map(State.awaitingConfirmation) ?? .idle
+            }
         }
     }
 

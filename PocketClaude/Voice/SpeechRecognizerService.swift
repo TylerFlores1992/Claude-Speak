@@ -35,7 +35,12 @@ final class SpeechRecognizerService: NSObject, ObservableObject {
     @Published private(set) var isOnDevice = false
 
     private let recognizer: SFSpeechRecognizer?
-    private let audioEngine = AVAudioEngine()
+    /// Rebuilt for every take rather than reused. An engine caches the audio
+    /// graph it was built against, and this app changes the route constantly —
+    /// playback for the Now Playing loop, record for the microphone, playback
+    /// again to speak. A reused engine can hold a stale input format and then
+    /// raise inside `installTapOnBus:`, which aborts the process.
+    private var audioEngine = AVAudioEngine()
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var task: SFSpeechRecognitionTask?
 
@@ -74,7 +79,7 @@ final class SpeechRecognizerService: NSObject, ObservableObject {
 
     // MARK: - Recording
 
-    func start(preferOnDevice: Bool) throws {
+    func start(preferOnDevice: Bool) async throws {
         guard !isRecording else { return }
         guard let recognizer, recognizer.isAvailable else { throw RecognizerError.unavailable }
 
@@ -83,6 +88,23 @@ final class SpeechRecognizerService: NSObject, ObservableObject {
         transcript = ""
 
         try AudioSessionController.configureForRecording()
+
+        // Let the route settle before touching the input node.
+        //
+        // Activating `.playAndRecord` starts a renegotiation that finishes
+        // asynchronously — CoreAudio is still delivering `IOFormatsChanged`
+        // while this returns. Reading the input format during that window gives
+        // a value that is stale by the time `installTapOnBus:` validates it,
+        // and the mismatch raises an Objective-C exception, which Swift cannot
+        // catch: the process aborts. Two crash reports landed exactly there.
+        //
+        // This is why the first squeeze appeared to "work after 2–3 seconds":
+        // the route had settled by then.
+        try? await Task.sleep(nanoseconds: 250_000_000)
+
+        // A fresh engine, because the old one may still describe the previous
+        // route.
+        audioEngine = AVAudioEngine()
 
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
@@ -128,7 +150,12 @@ final class SpeechRecognizerService: NSObject, ObservableObject {
             throw RecognizerError.inputUnavailable
         }
 
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
+        // `nil` format, not the one read above: it tells the engine to use the
+        // bus's own format at install time, so there is no value of ours for it
+        // to disagree with. Passing a format we read a moment earlier is what
+        // makes the mismatch assertion reachable at all. The read above is kept
+        // only to detect a genuinely absent input and fail cleanly.
+        inputNode.installTap(onBus: 0, bufferSize: 1024, format: nil) { buffer, _ in
             request.append(buffer)
         }
 
