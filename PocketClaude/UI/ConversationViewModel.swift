@@ -145,11 +145,19 @@ final class ConversationViewModel: ObservableObject {
         // Talking over the agent cancels its answer — that's the point of a
         // push-to-talk loop you can interrupt.
         speech.stop()
+        // Pause the Now Playing loop across the switch to `.playAndRecord`.
+        // Leaving it playing made CoreAudio renegotiate the route while the
+        // microphone was being set up, and the input format read back empty —
+        // which aborted the process inside `installTapOnBus:`. It restarts
+        // below, once the microphone is live, so the slot is never given up.
+        nowPlaying.suspend()
         do {
             try recognizer.start(preferOnDevice: settings.preferOnDeviceRecognition)
+            nowPlaying.resume(reassertCategory: false)
             state = .listening
             observeLiveTranscript()
         } catch {
+            nowPlaying.resume(reassertCategory: true)
             errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             // Don't drop a pending confirmation on the floor if the mic failed.
             state = pendingConfirmationPrompt.map(State.awaitingConfirmation) ?? .idle

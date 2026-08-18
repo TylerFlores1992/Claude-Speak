@@ -45,6 +45,31 @@ final class NowPlayingKeeper {
     /// Switching the session to `.playAndRecord` for the microphone, or an
     /// interruption, can stop the loop. Call this whenever the app returns to
     /// rest so the slot isn't quietly lost after the first question.
+    /// Stop the loop for a moment without giving up the slot.
+    ///
+    /// Switching the session to `.playAndRecord` while this is playing makes
+    /// CoreAudio renegotiate the route underneath us, and the microphone's
+    /// format reads back empty during that window — which used to abort the
+    /// process inside `installTapOnBus:`. Pausing across the switch removes the
+    /// contention; `resume(reassertCategory: false)` starts it again once the
+    /// microphone is live, so the slot is still held while you talk.
+    func suspend() {
+        player?.pause()
+    }
+
+    /// Start the loop again.
+    ///
+    /// `reassertCategory` must be false while the microphone is live —
+    /// re-applying the playback category there would tear down the recording
+    /// session mid-sentence.
+    func resume(reassertCategory: Bool) {
+        guard let player else { return }
+        if reassertCategory {
+            try? AudioSessionController.configureForHoldingNowPlaying()
+        }
+        if !player.isPlaying { player.play() }
+    }
+
     func resumeIfNeeded() {
         guard let player else { return }
         // Re-assert the category even when the loop is still running. Speaking
