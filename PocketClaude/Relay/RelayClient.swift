@@ -162,24 +162,40 @@ struct RelayClient {
         var result = RelayResult()
         var eventName = ""
         var dataLine = ""
-        var sawTerminal = false
+        var finished = false
 
-        // Minimal SSE reader: accumulate `event:`/`data:` until a blank line.
-        for try await line in lines {
-            if line.isEmpty {
+        // Minimal SSE reader. A frame ends at a blank line *or* at the next
+        // frame's `event:` line.
+        //
+        // Both, because the blank line can't be relied on: Foundation's
+        // `AsyncLineSequence` — which is what `URLSession.bytes.lines` gives
+        // you — strips empty lines rather than yielding "". Waiting only for a
+        // blank line meant no frame ever ended, every payload accumulated into
+        // one unparseable string, and the whole answer was silently lost.
+        for try await raw in lines {
+            // Tolerate CRLF, since the relay is often on Windows.
+            let line = raw.hasSuffix("\r") ? String(raw.dropLast()) : raw
+            let startsNewFrame = line.hasPrefix("event:")
+                && !eventName.isEmpty
+                && !dataLine.isEmpty
+
+            if line.isEmpty || startsNewFrame {
                 if let terminal = try await dispatch(
                     eventName: eventName,
                     dataLine: dataLine,
                     into: &result,
                     onEvent: onEvent
-                ) {
-                    sawTerminal = true
-                    if terminal { break }
+                ), terminal {
+                    finished = true
                 }
                 eventName = ""
                 dataLine = ""
-                continue
+                if finished { break }
+                // A blank line carries nothing else; an `event:` line still
+                // needs parsing below as the start of the next frame.
+                if line.isEmpty { continue }
             }
+
             if line.hasPrefix("event:") {
                 eventName = String(line.dropFirst("event:".count))
                     .trimmingCharacters(in: .whitespaces)
@@ -189,8 +205,9 @@ struct RelayClient {
             }
         }
 
-        // A stream that ended without a blank line after its last frame.
-        if !sawTerminal, !eventName.isEmpty {
+        // A stream that ended without a separator after its last frame — which
+        // is every stream, when the line sequence drops blank lines.
+        if !finished {
             _ = try await dispatch(
                 eventName: eventName,
                 dataLine: dataLine,
