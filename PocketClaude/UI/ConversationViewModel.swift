@@ -194,11 +194,48 @@ final class ConversationViewModel: ObservableObject {
 
     /// Mirrors the recognizer's live transcript into our own published property
     /// so the view has one source of truth to bind to.
+    /// How long the transcript must stop growing before the take is sent.
+    /// Long enough to think mid-sentence, short enough not to feel stuck.
+    private static let silenceBeforeSending: TimeInterval = 1.6
+    /// Give up on a take where nothing was ever said.
+    private static let silenceBeforeGivingUp: TimeInterval = 8
+    /// Absolute ceiling, so a stuck recogniser can't hold the microphone open.
+    private static let longestTake: TimeInterval = 45
+
+    /// Mirrors the live transcript, and ends the take when you stop talking.
+    ///
+    /// Ending on silence rather than on a second squeeze is deliberate. Opening
+    /// the microphone switches the session to `.playAndRecord`, and a recording
+    /// session is not a *playing* one — so iOS stops treating this as the Now
+    /// Playing app and the second press has nowhere to be delivered. Waiting
+    /// for it left the app listening forever. One squeeze to start, then just
+    /// stop talking; a second squeeze still works when it does arrive.
     private func observeLiveTranscript() {
         Task { [weak self] in
             guard let self else { return }
+            let startedAt = Date()
+            var lastText = ""
+            var lastChange = Date()
+
             while self.recognizer.isRecording {
-                self.liveTranscript = self.recognizer.transcript
+                let current = self.recognizer.transcript
+                self.liveTranscript = current
+                if current != lastText {
+                    lastText = current
+                    lastChange = Date()
+                }
+
+                let quiet = Date().timeIntervalSince(lastChange)
+                let elapsed = Date().timeIntervalSince(startedAt)
+                let saidSomething = !current.trimmingCharacters(in: .whitespaces).isEmpty
+                let done = (saidSomething && quiet >= Self.silenceBeforeSending)
+                    || (!saidSomething && quiet >= Self.silenceBeforeGivingUp)
+                    || elapsed >= Self.longestTake
+
+                if done {
+                    self.endListening()
+                    break
+                }
                 try? await Task.sleep(nanoseconds: 120_000_000)
             }
             self.liveTranscript = ""
