@@ -21,7 +21,7 @@ struct PocketClaudeApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView(viewModel: viewModel, settings: settings)
+            RootView(viewModel: viewModel, settings: settings)
                 .tint(.indigo)
                 .task {
                     // A question from the wrist runs through exactly the same

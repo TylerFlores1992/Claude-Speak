@@ -66,10 +66,13 @@ private struct TranscriptRow: View {
 
         case .assistant:
             VStack(alignment: .leading, spacing: 8) {
-                Text(entry.text)
+                // Rendered rather than raw: answers arrive as Markdown, and
+                // literal ** and ## in the transcript is what you read.
+                MarkdownText(text: entry.text)
+                    .textSelection(.enabled)
                 if let detail = entry.detail, !detail.isEmpty, detail != entry.text {
                     DisclosureGroup("Detail", isExpanded: $isDetailExpanded) {
-                        Text(detail)
+                        MarkdownText(text: detail)
                             .font(.callout)
                             .textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)

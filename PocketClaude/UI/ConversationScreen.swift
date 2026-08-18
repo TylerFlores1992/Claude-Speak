@@ -1,7 +1,10 @@
 import SwiftUI
 
-/// The whole app is one screen: transcript on top, big talk button on the bottom.
-struct ContentView: View {
+/// The conversation: transcript on top, big talk button on the bottom.
+///
+/// Pushed from the dashboard rather than being the root, so the navigation
+/// stack belongs to `RootView` and this supplies only its own toolbar.
+struct ConversationScreen: View {
     @ObservedObject var viewModel: ConversationViewModel
     @ObservedObject var settings: AppSettings
     @Environment(\.scenePhase) private var scenePhase
@@ -11,7 +14,7 @@ struct ContentView: View {
     @State private var isShowingSessions = false
 
     var body: some View {
-        NavigationStack {
+        Group {
             VStack(spacing: 0) {
                 TranscriptView(
                     entries: viewModel.session.transcript,
@@ -25,6 +28,7 @@ struct ContentView: View {
                 }
 
                 if isShowingTypedInput { typedInputBar }
+                composerChips
 
                 TalkButton(
                     isListening: viewModel.state == .listening,
@@ -36,7 +40,7 @@ struct ContentView: View {
                 )
                 .padding(.vertical, 20)
             }
-            .navigationTitle("PocketClaude")
+            .navigationTitle(viewModel.activeProject.isEmpty ? "PocketClaude" : viewModel.activeProject)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItemGroup(placement: .topBarLeading) {
@@ -61,14 +65,7 @@ struct ContentView: View {
                     }
                     .accessibilityLabel("Repeat last answer")
 
-                    Button { viewModel.isShowingSettings = true } label: {
-                        Image(systemName: "gearshape")
-                    }
-                    .accessibilityLabel("Settings")
                 }
-            }
-            .sheet(isPresented: $viewModel.isShowingSettings) {
-                SettingsView(settings: settings)
             }
             .sheet(isPresented: $isShowingSessions) {
                 SessionListView(viewModel: viewModel)
@@ -190,6 +187,43 @@ struct ContentView: View {
     }
 
     // MARK: - Typed fallback
+
+
+    /// Model and effort, where you can reach them mid-conversation rather than
+    /// buried in Settings. Only meaningful on the relay, which passes --model
+    /// to the CLI; the direct API path reads the same settings.
+    private var composerChips: some View {
+        HStack(spacing: 8) {
+            ChipMenu(title: settings.model.displayName) {
+                Picker("Model", selection: $settings.model) {
+                    ForEach(AppSettings.Model.allCases) { model in
+                        Text(model.displayName).tag(model)
+                    }
+                }
+            }
+
+            ChipMenu(title: settings.effort.displayName, systemImage: "bolt.fill") {
+                Picker("Effort", selection: $settings.effort) {
+                    ForEach(AppSettings.Effort.allCases) { effort in
+                        Text(effort.displayName).tag(effort)
+                    }
+                }
+            }
+
+            if !viewModel.activeProject.isEmpty {
+                Text(viewModel.activeProject)
+                    .font(.caption.weight(.medium))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(Color.pcIconWell, in: Capsule())
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 16)
+        .padding(.bottom, 4)
+    }
 
     private var typedInputBar: some View {
         HStack {

@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { buildArgs, interpret } from "./server.mjs";
+import { buildArgs, interpret, readHead, projects, resolveProject } from "./server.mjs";
 
 const SERVER = fileURLToPath(new URL("./server.mjs", import.meta.url));
 let failures = 0;
@@ -330,6 +330,77 @@ try {
 } finally {
   failServer?.kill();
 }
+
+// --- Session listing -------------------------------------------------------
+// The dashboard lists every Claude Code session on the machine, including ones
+// started at the keyboard. Titles and project names come from the session file
+// itself, so these check the parsing rather than the filesystem walk.
+
+test("reads an explicit session title", () => {
+  const dir = mkdtempSync(join(tmpdir(), "pc-sessions-"));
+  const file = join(dir, "abc.jsonl");
+  writeFileSync(file, [
+    JSON.stringify({ type: "custom-title", customTitle: "CampHawk polling" }),
+    JSON.stringify({ type: "user", cwd: "/home/tyler/campsite-finder", message: { content: "hi" } }),
+  ].join("\n"));
+
+  const head = readHead(file);
+  assert.equal(head.title, "CampHawk polling");
+  assert.equal(head.cwd, "/home/tyler/campsite-finder");
+});
+
+test("falls back to the first question when there is no title", () => {
+  const dir = mkdtempSync(join(tmpdir(), "pc-sessions-"));
+  const file = join(dir, "def.jsonl");
+  writeFileSync(file, JSON.stringify({
+    type: "user",
+    cwd: "/home/tyler/repo",
+    message: { content: [{ type: "text", text: "Why does the poller retry?\nSecond line" }] },
+  }));
+
+  assert.equal(readHead(file).title, "Why does the poller retry?");
+});
+
+test("survives a truncated final line", () => {
+  // Only the head of each file is read, so the last line is usually partial.
+  const dir = mkdtempSync(join(tmpdir(), "pc-sessions-"));
+  const file = join(dir, "ghi.jsonl");
+  writeFileSync(file, JSON.stringify({ type: "custom-title", customTitle: "Fine" }) + "\n{\"type\":\"user\",\"mess");
+
+  assert.equal(readHead(file).title, "Fine");
+});
+
+test("an unreadable file is listed rather than crashing the endpoint", () => {
+  const head = readHead(join(tmpdir(), "definitely-not-here-", String(Date.now()), "x.jsonl"));
+  assert.equal(head.title, "Untitled session");
+  assert.equal(head.cwd, null);
+});
+
+// --- Workspaces ------------------------------------------------------------
+// A session can run somewhere other than the configured repository — including
+// a scratch directory, for thinking out loud rather than asking about code.
+// The set of places is an allowlist, not a path from the request.
+
+test("the configured repo and a scratch workspace are always offered", () => {
+  const names = projects().map((p) => p.name.toLowerCase());
+  assert.ok(names.includes("chat"), "expected a scratch workspace");
+  assert.equal(new Set(names).size, names.length, "names must be unique");
+});
+
+test("an unknown project is refused", () => {
+  assert.equal(resolveProject("no-such-project"), null);
+});
+
+test("a path cannot be smuggled in as a project name", () => {
+  // The request names a workspace; it never supplies a directory.
+  for (const attempt of ["../../etc", "/etc", "C:\\Windows", "..\\..\\secrets"]) {
+    assert.equal(resolveProject(attempt), null, `should refuse ${attempt}`);
+  }
+});
+
+test("no project means the configured repository", () => {
+  assert.equal(resolveProject(""), process.env.RELAY_REPO ?? process.cwd());
+});
 
 console.log(failures === 0 ? "\nall relay tests passed" : `\n${failures} failing`);
 process.exit(failures === 0 ? 0 : 1);

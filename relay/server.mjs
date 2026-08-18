@@ -13,7 +13,10 @@
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { timingSafeEqual } from "node:crypto";
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, readdirSync, realpathSync, openSync, readSync, closeSync, statSync } from "node:fs";
+import { homedir } from "node:os";
+import { mkdirSync } from "node:fs";
+import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const PORT = Number(process.env.RELAY_PORT ?? 8787);
@@ -32,8 +35,58 @@ const TIMEOUT_MS = Number(process.env.RELAY_TIMEOUT_MS ?? 300_000);
 const PERMISSION_MODE = process.env.RELAY_PERMISSION_MODE ?? "dontAsk";
 const ALLOWED_TOOLS = process.env.RELAY_ALLOWED_TOOLS ?? "";
 
+// Extra places a session can run, as "name=path" pairs separated by commas:
+//     RELAY_PROJECTS="camphawk=C:\\code\\campsite-finder,notes=C:\\code\\notes"
+const EXTRA_PROJECTS = process.env.RELAY_PROJECTS ?? "";
+// A directory with no code in it, for thinking out loud rather than asking
+// about a repository. `claude -p` runs anywhere; it only reads code if there
+// is code to read, so an empty directory is all a general conversation needs.
+const SCRATCH = process.env.RELAY_SCRATCH ?? join(homedir(), "pocketclaude-chat");
+
 /// True only when this file is the program being run, so `import` from the test
 /// suite gets the functions without starting a listener or exiting on config.
+/**
+ * Where a session may run. An allowlist rather than a path from the request:
+ * the token is the only thing between the internet and this process, and
+ * "spawn a CLI in any directory you name" is not a thing to hand out on the
+ * strength of one bearer token.
+ */
+function projects() {
+  const list = [
+    { name: basename(REPO) || "repo", path: REPO, kind: "code" },
+    { name: "Chat", path: SCRATCH, kind: "scratch" },
+  ];
+  for (const pair of EXTRA_PROJECTS.split(",")) {
+    const [name, path] = pair.split("=").map((part) => part?.trim());
+    if (name && path) list.push({ name, path, kind: "code" });
+  }
+  // First definition of a name wins, so RELAY_REPO can't be shadowed.
+  const seen = new Set();
+  return list.filter((entry) => {
+    const key = entry.name.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+/** The directory for a requested project name, or null if it isn't allowed. */
+function resolveProject(name) {
+  if (!name) return REPO;
+  const match = projects().find((p) => p.name.toLowerCase() === String(name).toLowerCase());
+  if (!match) return null;
+  // Created on demand: asking for the scratch workspace shouldn't require
+  // having made a folder first.
+  if (match.kind === "scratch" && !existsSync(match.path)) {
+    try {
+      mkdirSync(match.path, { recursive: true });
+    } catch {
+      return null;
+    }
+  }
+  return existsSync(match.path) ? match.path : null;
+}
+
 function isEntryPoint() {
   if (!process.argv[1]) return false;
   try {
@@ -156,6 +209,7 @@ async function handleAsk(req, res) {
   }
 
   const text = typeof payload.text === "string" ? payload.text.trim() : "";
+  const project = typeof payload.project === "string" ? payload.project.trim() : "";
   const sessionId = typeof payload.sessionId === "string" && payload.sessionId
     ? payload.sessionId
     : null;
@@ -163,6 +217,15 @@ async function handleAsk(req, res) {
   if (!text) {
     res.writeHead(400, { "content-type": "application/json" });
     res.end(JSON.stringify({ error: "text is required" }));
+    return;
+  }
+
+  // Rejected before the stream opens, so a bad project name is an ordinary
+  // HTTP error rather than an error frame the phone has to unpick.
+  const workingDirectory = resolveProject(project);
+  if (!workingDirectory) {
+    res.writeHead(400, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: `unknown project: ${project}` }));
     return;
   }
 
@@ -176,7 +239,7 @@ async function handleAsk(req, res) {
   });
 
   const child = spawn(CLAUDE_BIN, buildArgs({ text, sessionId }), {
-    cwd: REPO,
+    cwd: workingDirectory,
     // Inherit the environment so the CLI finds your logged-in credentials.
     env: process.env,
     stdio: ["ignore", "pipe", "pipe"],
@@ -254,6 +317,107 @@ async function handleAsk(req, res) {
   });
 }
 
+
+/**
+ * Every Claude Code session on this machine, newest first.
+ *
+ * Claude Code writes one JSONL file per session under
+ * `~/.claude/projects/<cwd-with-slashes-as-dashes>/<session-id>.jsonl`. That is
+ * the same store the CLI resumes from, so anything listed here can be picked up
+ * with `--resume` — including sessions started at the keyboard rather than from
+ * the phone. That is the whole point: walking away from the desk shouldn't mean
+ * leaving the conversation behind.
+ *
+ * Only the head of each file is read. They reach tens of megabytes, and
+ * everything needed for a list — the title and the project — is at the top.
+ */
+function listSessions({ limit = 60 } = {}) {
+  const root = join(homedir(), ".claude", "projects");
+  if (!existsSync(root)) return [];
+
+  const found = [];
+  for (const projectDir of readdirSync(root, { withFileTypes: true })) {
+    if (!projectDir.isDirectory()) continue;
+    const dir = join(root, projectDir.name);
+    for (const entry of readdirSync(dir)) {
+      if (!entry.endsWith(".jsonl")) continue;
+      const path = join(dir, entry);
+      let stat;
+      try {
+        stat = statSync(path);
+      } catch {
+        continue;
+      }
+      const head = readHead(path);
+      const cwd = head.cwd ?? "";
+      found.push({
+        id: entry.replace(/\.jsonl$/, ""),
+        // From the `cwd` the session itself records. Deriving it from the
+        // directory name instead is lossy: separators are encoded as dashes,
+        // so "Claude-Speak" and "Claude/Speak" become the same string, and a
+        // repository with a dash in its name reads back wrong.
+        project: cwd ? cwd.split(/[\\/]/).filter(Boolean).pop() : projectDir.name,
+        projectPath: cwd || projectDir.name,
+        updatedAt: stat.mtime.toISOString(),
+        bytes: stat.size,
+        title: head.title,
+      });
+    }
+  }
+
+  found.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+  return found.slice(0, limit);
+}
+
+/** Title and working directory, from one bounded read of the file's head. */
+function readHead(path, maxBytes = 64 * 1024) {
+  let fd;
+  try {
+    fd = openSync(path, "r");
+    const buffer = Buffer.alloc(maxBytes);
+    const read = readSync(fd, buffer, 0, maxBytes, 0);
+    const head = buffer.subarray(0, read).toString("utf8");
+
+    let title = null;
+    let cwd = null;
+    for (const line of head.split("\n")) {
+      if (!line.trim()) continue;
+      let event;
+      try {
+        event = JSON.parse(line);
+      } catch {
+        continue; // The last line of a bounded read is usually a partial one.
+      }
+      if (!cwd && typeof event.cwd === "string") cwd = event.cwd;
+      // An explicit title wins over a guess from the first question.
+      if (event.type === "custom-title" && event.customTitle) {
+        title = event.customTitle;
+      } else if (!title) {
+        const content =
+          typeof event.content === "string"
+            ? event.content
+            : typeof event.message?.content === "string"
+              ? event.message.content
+              : Array.isArray(event.message?.content)
+                ? event.message.content.find((b) => b?.type === "text")?.text
+                : null;
+        if (content) title = firstLine(content);
+      }
+      if (title && cwd) break;
+    }
+    return { title: title ?? "Untitled session", cwd };
+  } catch {
+    return { title: "Untitled session", cwd: null };
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
+function firstLine(text) {
+  const line = text.split("\n").map((l) => l.trim()).find(Boolean) ?? "";
+  return line.length > 80 ? line.slice(0, 80) + "…" : line || "Untitled session";
+}
+
 const server = createServer((req, res) => {
   if (req.method === "GET" && req.url === "/health") {
     res.writeHead(200, { "content-type": "application/json" });
@@ -264,6 +428,25 @@ const server = createServer((req, res) => {
   if (!authorized(req)) {
     res.writeHead(401, { "content-type": "application/json" });
     res.end(JSON.stringify({ error: "unauthorized" }));
+    return;
+  }
+
+  if (req.method === "GET" && req.url === "/projects") {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      projects: projects().map((p) => ({ ...p, available: existsSync(p.path) || p.kind === "scratch" })),
+    }));
+    return;
+  }
+
+  if (req.method === "GET" && req.url === "/sessions") {
+    try {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ sessions: listSessions() }));
+    } catch (error) {
+      res.writeHead(500, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: error.message }));
+    }
     return;
   }
 
@@ -306,4 +489,4 @@ if (isEntryPoint()) {
 }
 
 // Exported for the test script; importing this file starts nothing.
-export { interpret, buildArgs };
+export { interpret, buildArgs, readHead, listSessions, projects, resolveProject };

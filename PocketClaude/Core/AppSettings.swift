@@ -61,6 +61,18 @@ final class AppSettings: ObservableObject {
     enum Effort: String, CaseIterable, Identifiable {
         case low, medium, high, xhigh, max
         var id: String { rawValue }
+
+        /// Shown on the composer chip. `xhigh` is the only one whose raw value
+        /// doesn't read as English.
+        var displayName: String {
+            switch self {
+            case .low: return "Low"
+            case .medium: return "Medium"
+            case .high: return "High"
+            case .xhigh: return "Very high"
+            case .max: return "Max"
+            }
+        }
     }
 
     enum VoiceEngine: String, CaseIterable, Identifiable {
