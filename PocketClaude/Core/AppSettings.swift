@@ -184,7 +184,13 @@ final class AppSettings: ObservableObject {
         self.elevenLabsVoiceID = defaults.string(forKey: Keys.elevenLabsVoiceID) ?? ""
         let storedRate = defaults.double(forKey: Keys.speechRate)
         self.speechRate = storedRate > 0 ? storedRate : 0.52
-        self.preferOnDeviceRecognition = defaults.object(forKey: Keys.preferOnDevice) as? Bool ?? true
+        // Off by default. On-device recognition keeps audio off Apple's
+        // servers, which is the better property — but on device it reported
+        // partial results and then finalised to an empty transcript, so the
+        // words appeared, vanished, and the question was never sent. A default
+        // that silently loses what you said is worse than one that transcribes
+        // in the cloud. Turn it on if it works for you.
+        self.preferOnDeviceRecognition = defaults.object(forKey: Keys.preferOnDevice) as? Bool ?? false
         self.handsFreeMode = defaults.bool(forKey: Keys.handsFreeMode)
         self.handsFreeEndKeyword = defaults.string(forKey: Keys.handsFreeEndKeyword) ?? "done"
         self.useStructuredOutput = defaults.bool(forKey: Keys.useStructuredOutput)
