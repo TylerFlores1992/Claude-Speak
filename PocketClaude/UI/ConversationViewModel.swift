@@ -98,6 +98,13 @@ final class ConversationViewModel: ObservableObject {
             remoteCommands.disable()
             return
         }
+        // Take the Now Playing slot straight away rather than waiting for the
+        // first answer to be spoken. Without this the first squeeze of a
+        // session is swallowed, because iOS delivers the press only to the app
+        // that currently holds the slot.
+        speech.primeNowPlaying()
+        remoteCommands.publishNowPlaying(title: "PocketClaude", isPlaying: false)
+
         remoteCommands.onTogglePressed = { [weak self] in
             guard let self else { return }
             switch self.state {
