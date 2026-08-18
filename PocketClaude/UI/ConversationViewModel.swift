@@ -308,6 +308,17 @@ final class ConversationViewModel: ObservableObject {
 
     // MARK: - Sending a turn
 
+    /// Answers a question that arrived from the Apple Watch.
+    ///
+    /// Deliberately routed through `send` rather than talking to the relay
+    /// directly, so a question asked from the wrist lands in the same
+    /// conversation, is spoken aloud the same way, and shows up in the
+    /// transcript when you next look at the phone.
+    func answerFromWatch(_ text: String) async -> String {
+        await send(text)
+        return session.transcript.last { $0.kind == .assistant }?.text ?? ""
+    }
+
     func send(_ text: String) async {
         guard !text.isEmpty else { return }
         switch settings.backend {
