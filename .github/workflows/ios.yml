@@ -14,12 +14,17 @@ name: iOS
 # twice — which is what exhausted a month of Actions minutes in a day, since
 # macOS runners bill at a 10x multiplier. Branch work is now covered by the
 # pull_request run, and main is covered after merge.
+#
+# No `paths-ignore`. It was here to skip CI for markdown-only edits, but a
+# filter that can silently skip a run is worse than a build that costs a few
+# free minutes: a push landed with no run at all and the change sat
+# unvalidated until it was noticed by hand. Limiting `push` to main is what
+# actually removed the double-build; the path filter only added a way to be
+# wrong quietly.
 on:
   push:
     branches: [main]
-    paths-ignore: ["**/*.md", ".gitignore"]
   pull_request:
-    paths-ignore: ["**/*.md", ".gitignore"]
   workflow_dispatch:
     inputs:
       upload_to_testflight:
