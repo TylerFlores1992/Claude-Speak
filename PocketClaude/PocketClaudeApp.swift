@@ -9,6 +9,9 @@ struct PocketClaudeApp: App {
     /// a store instance, as opposed to `@ObservedObject`, which is a plain prop.
     @StateObject private var settings: AppSettings
     @StateObject private var viewModel: ConversationViewModel
+    /// Answers questions sent from the watch. Inert until a watch app is
+    /// paired, so it costs nothing when there isn't one.
+    @StateObject private var phoneLink = PhoneLink()
 
     init() {
         let settings = AppSettings()
@@ -20,6 +23,15 @@ struct PocketClaudeApp: App {
         WindowGroup {
             ContentView(viewModel: viewModel, settings: settings)
                 .tint(.indigo)
+                .task {
+                    // A question from the wrist runs through exactly the same
+                    // path as one asked on screen: same relay, same transcript,
+                    // same spoken answer.
+                    phoneLink.onQuestion = { [weak viewModel] question in
+                        await viewModel?.answerFromWatch(question) ?? ""
+                    }
+                    phoneLink.activate()
+                }
         }
     }
 }

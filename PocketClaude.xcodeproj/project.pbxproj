@@ -6,15 +6,22 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		1A2B3C4D5E6F00000000002A /* PocketClaudeWatch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 1A2B3C4D5E6F000000000020 /* PocketClaudeWatch.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		1A2B3C4D5E6F000000000006 /* PocketClaude.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PocketClaude.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		1A2B3C4D5E6F000000000007 /* PocketClaudeTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PocketClaudeTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		1A2B3C4D5E6F00000000001C /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		1A2B3C4D5E6F00000000002D /* WatchInfo.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = WatchInfo.plist; sourceTree = "<group>"; };
+		1A2B3C4D5E6F000000000020 /* PocketClaudeWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PocketClaudeWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		1A2B3C4D5E6F000000000017 /* PocketClaude */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = PocketClaude; sourceTree = "<group>"; };
 		1A2B3C4D5E6F000000000018 /* PocketClaudeTests */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = PocketClaudeTests; sourceTree = "<group>"; };
+		1A2B3C4D5E6F000000000021 /* PocketClaudeWatch */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = PocketClaudeWatch; sourceTree = "<group>"; };
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -32,6 +39,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		1A2B3C4D5E6F000000000024 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -41,6 +55,7 @@
 				1A2B3C4D5E6F00000000001B /* Config */,
 				1A2B3C4D5E6F000000000017 /* PocketClaude */,
 				1A2B3C4D5E6F000000000018 /* PocketClaudeTests */,
+				1A2B3C4D5E6F000000000021 /* PocketClaudeWatch */,
 				1A2B3C4D5E6F000000000003 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -50,6 +65,7 @@
 			children = (
 				1A2B3C4D5E6F000000000006 /* PocketClaude.app */,
 				1A2B3C4D5E6F000000000007 /* PocketClaudeTests.xctest */,
+				1A2B3C4D5E6F000000000020 /* PocketClaudeWatch.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -58,6 +74,7 @@
 			isa = PBXGroup;
 			children = (
 				1A2B3C4D5E6F00000000001C /* Info.plist */,
+				1A2B3C4D5E6F00000000002D /* WatchInfo.plist */,
 			);
 			path = Config;
 			sourceTree = "<group>";
@@ -72,10 +89,12 @@
 				1A2B3C4D5E6F000000000008 /* Sources */,
 				1A2B3C4D5E6F000000000009 /* Frameworks */,
 				1A2B3C4D5E6F00000000000A /* Resources */,
+				1A2B3C4D5E6F000000000029 /* Embed Watch Content */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				1A2B3C4D5E6F00000000002B /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				1A2B3C4D5E6F000000000017 /* PocketClaude */,
@@ -106,6 +125,26 @@
 			productReference = 1A2B3C4D5E6F000000000007 /* PocketClaudeTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
+		1A2B3C4D5E6F000000000022 /* PocketClaudeWatch */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 1A2B3C4D5E6F000000000028 /* Build configuration list for PBXNativeTarget "PocketClaudeWatch" */;
+			buildPhases = (
+				1A2B3C4D5E6F000000000023 /* Sources */,
+				1A2B3C4D5E6F000000000024 /* Frameworks */,
+				1A2B3C4D5E6F000000000025 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				1A2B3C4D5E6F000000000021 /* PocketClaudeWatch */,
+			);
+			name = PocketClaudeWatch;
+			productName = PocketClaudeWatch;
+			productReference = 1A2B3C4D5E6F000000000020 /* PocketClaudeWatch.app */;
+			productType = "com.apple.product-type.application";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -122,6 +161,9 @@
 					1A2B3C4D5E6F000000000005 = {
 						CreatedOnToolsVersion = 16.0;
 						TestTargetID = 1A2B3C4D5E6F000000000004;
+					};
+					1A2B3C4D5E6F000000000022 = {
+						CreatedOnToolsVersion = 16.0;
 					};
 				};
 			};
@@ -141,6 +183,7 @@
 			targets = (
 				1A2B3C4D5E6F000000000004 /* PocketClaude */,
 				1A2B3C4D5E6F000000000005 /* PocketClaudeTests */,
+				1A2B3C4D5E6F000000000022 /* PocketClaudeWatch */,
 			);
 		};
 /* End PBXProject section */
@@ -160,7 +203,28 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		1A2B3C4D5E6F000000000025 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		1A2B3C4D5E6F000000000029 /* Embed Watch Content */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "$(CONTENTS_FOLDER_PATH)/Watch";
+			dstSubfolderSpec = 16;
+			files = (
+				1A2B3C4D5E6F00000000002A /* PocketClaudeWatch.app in Embed Watch Content */,
+			);
+			name = "Embed Watch Content";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		1A2B3C4D5E6F000000000008 /* Sources */ = {
@@ -177,6 +241,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		1A2B3C4D5E6F000000000023 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -184,6 +255,11 @@
 			isa = PBXTargetDependency;
 			target = 1A2B3C4D5E6F000000000004 /* PocketClaude */;
 			targetProxy = 1A2B3C4D5E6F00000000001A /* PBXContainerItemProxy */;
+		};
+		1A2B3C4D5E6F00000000002B /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 1A2B3C4D5E6F000000000022 /* PocketClaudeWatch */;
+			targetProxy = 1A2B3C4D5E6F00000000002C /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -194,6 +270,13 @@
 			proxyType = 1;
 			remoteGlobalIDString = 1A2B3C4D5E6F000000000004;
 			remoteInfo = PocketClaude;
+		};
+		1A2B3C4D5E6F00000000002C /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 1A2B3C4D5E6F000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 1A2B3C4D5E6F000000000022;
+			remoteInfo = PocketClaudeWatch;
 		};
 /* End PBXContainerItemProxy section */
 
@@ -335,6 +418,46 @@
 			};
 			name = Release;
 		};
+		1A2B3C4D5E6F000000000026 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Config/WatchInfo.plist;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.tylerflores.pocketclaude.watchkitapp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 10.0;
+			};
+			name = Debug;
+		};
+		1A2B3C4D5E6F000000000027 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Config/WatchInfo.plist;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.tylerflores.pocketclaude.watchkitapp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 10.0;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -361,6 +484,15 @@
 			buildConfigurations = (
 				1A2B3C4D5E6F000000000015 /* Debug */,
 				1A2B3C4D5E6F000000000016 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		1A2B3C4D5E6F000000000028 /* Build configuration list for PBXNativeTarget "PocketClaudeWatch" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				1A2B3C4D5E6F000000000026 /* Debug */,
+				1A2B3C4D5E6F000000000027 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

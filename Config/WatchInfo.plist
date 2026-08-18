@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundleDisplayName</key>
+	<string>PocketClaude</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+
+	<!-- Marks this as a modern single-target watch app rather than the old
+	     WatchKit app + extension pair. -->
+	<key>WKApplication</key>
+	<true/>
+	<!-- Which iPhone app this belongs to. Without it the watch app installs as
+	     an independent app and WatchConnectivity has nothing to pair with. -->
+	<key>WKCompanionAppBundleIdentifier</key>
+	<string>com.tylerflores.pocketclaude</string>
+
+	<!-- Dictation records audio, so the same prompt the phone shows applies
+	     here. Shown verbatim on the watch. -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>PocketClaude records your voice when you tap Ask so it can send your question to Claude.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>PocketClaude converts what you say into text so it can be sent to Claude.</string>
+</dict>
+</plist>
