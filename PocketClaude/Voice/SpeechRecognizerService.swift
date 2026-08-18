@@ -29,6 +29,9 @@ final class SpeechRecognizerService: NSObject, ObservableObject {
         }
     }
 
+    /// Why the last take produced nothing, when the Speech framework said so.
+    /// Cleared at the start of each take.
+    @Published private(set) var lastError: String?
     /// Live transcript, updated as you speak.
     @Published private(set) var transcript: String = ""
     @Published private(set) var isRecording = false
@@ -86,6 +89,7 @@ final class SpeechRecognizerService: NSObject, ObservableObject {
         // Clean up anything left over from a previous take.
         reset()
         transcript = ""
+        lastError = nil
 
         try AudioSessionController.configureForRecording()
 
@@ -122,11 +126,15 @@ final class SpeechRecognizerService: NSObject, ObservableObject {
             guard let self else { return }
             let text = result?.bestTranscription.formattedString
             let isFinal = result?.isFinal ?? false
-            let failed = error != nil
+            let failure = error?.localizedDescription
 
             Task { @MainActor in
                 if let text { self.transcript = text }
-                if isFinal || failed { self.finish(with: self.transcript) }
+                // Kept so a take that ends with nothing can say why instead of
+                // going quietly idle, which is indistinguishable from the app
+                // ignoring you.
+                if let failure { self.lastError = failure }
+                if isFinal || failure != nil { self.finish(with: self.transcript) }
             }
         }
 
