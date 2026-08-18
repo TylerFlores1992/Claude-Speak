@@ -13,6 +13,7 @@ final class SpeechRecognizerService: NSObject, ObservableObject {
         case notAuthorized
         case microphoneDenied
         case unavailable
+        case inputUnavailable
 
         var errorDescription: String? {
             switch self {
@@ -22,6 +23,8 @@ final class SpeechRecognizerService: NSObject, ObservableObject {
                 return "Microphone permission was denied. Enable it in iOS Settings → PocketClaude."
             case .unavailable:
                 return "Speech recognition is unavailable on this device right now."
+            case .inputUnavailable:
+                return "The microphone wasn't ready. Squeeze again in a moment."
             }
         }
     }
@@ -107,6 +110,24 @@ final class SpeechRecognizerService: NSObject, ObservableObject {
 
         let inputNode = audioEngine.inputNode
         let format = inputNode.outputFormat(forBus: 0)
+
+        // Check the format before installing the tap. `installTapOnBus:` raises
+        // an Objective-C exception on a zero-rate or zero-channel format, and an
+        // ObjC exception is not catchable from Swift — it aborts the process.
+        //
+        // That is a real state, not a theoretical one: with the screen locked
+        // and the app in the background, asking to record while the audio route
+        // is still switching from playback returns an empty format. The crash
+        // report showed exactly that — `installTapOnBus:` raising while
+        // CoreAudio was mid `IOFormatsChanged`.
+        //
+        // Throwing instead means a squeeze that arrives a moment too early
+        // fails visibly and recoverably rather than killing the app.
+        guard format.sampleRate > 0, format.channelCount > 0 else {
+            reset()
+            throw RecognizerError.inputUnavailable
+        }
+
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
             request.append(buffer)
         }
