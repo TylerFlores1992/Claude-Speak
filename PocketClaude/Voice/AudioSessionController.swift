@@ -19,7 +19,21 @@ enum AudioSessionController {
         try session.setCategory(
             .playAndRecord,
             mode: .default,
-            options: [.allowBluetooth, .duckOthers, .defaultToSpeaker]
+            // Just `.allowBluetooth`.
+            //
+            // `.defaultToSpeaker` was here and is actively wrong with an AirPod
+            // connected: it demands the output move to the phone's built-in
+            // speaker at the same moment the microphone is being acquired, so
+            // the route is renegotiated exactly when it needs to be stable.
+            // `.duckOthers` means mixing, which is a second negotiation over
+            // the same route. Starting the engine failed with CoreAudio's
+            // generic 'what' error while the screen was locked, where there is
+            // less slack for that to settle in.
+            //
+            // Nothing needs either option: the Now Playing loop already holds
+            // the route, so there is nothing to duck, and the whole point is to
+            // stay on the headset rather than fall back to the speaker.
+            options: [.allowBluetooth]
         )
         try session.setActive(true, options: [])
     }
