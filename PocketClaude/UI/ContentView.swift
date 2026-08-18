@@ -4,6 +4,7 @@ import SwiftUI
 struct ContentView: View {
     @ObservedObject var viewModel: ConversationViewModel
     @ObservedObject var settings: AppSettings
+    @Environment(\.scenePhase) private var scenePhase
 
     @State private var typedInput = ""
     @State private var isShowingTypedInput = false
@@ -90,6 +91,13 @@ struct ContentView: View {
         }
         .onChange(of: settings.stemPressControl) { _, _ in
             viewModel.applyStemPressSetting()
+        }
+        // Anything else that plays audio — music, a podcast — takes the Now
+        // Playing slot, and with it the stem press. Coming back to the
+        // foreground is the one moment we can take it back without the person
+        // having to ask a question first.
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { viewModel.applyStemPressSetting() }
         }
     }
 

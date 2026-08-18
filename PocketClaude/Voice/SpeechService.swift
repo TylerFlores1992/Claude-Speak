@@ -35,6 +35,29 @@ final class SpeechService: NSObject, ObservableObject {
         synthesizer.delegate = self
     }
 
+    // MARK: - Now Playing
+
+    /// Play one silent utterance so iOS makes us the Now Playing app.
+    ///
+    /// An AirPod stem press reaches exactly one app — whichever currently holds
+    /// the Now Playing slot — and an app takes that slot by *actually playing
+    /// audio*. Publishing `MPNowPlayingInfoCenter` metadata on its own does not
+    /// do it. Until this ran, the slot was only claimed when the first answer
+    /// was spoken, so the first squeeze after launch went nowhere and you had
+    /// to prime it with the on-screen button.
+    ///
+    /// A zero-volume space is the cheapest thing that counts as playback. The
+    /// audio session stays active afterwards, which is what keeps the slot.
+    func primeNowPlaying() {
+        guard !isSpeaking, !synthesizer.isSpeaking else { return }
+        try? AudioSessionController.configureForPlayback()
+        let utterance = AVSpeechUtterance(string: " ")
+        utterance.volume = 0
+        // Deliberately not counted in `queuedUtterances`: this isn't part of an
+        // answer, and `isSpeaking` must stay false so the UI shows Ready.
+        synthesizer.speak(utterance)
+    }
+
     // MARK: - Speaking
 
     func speak(
