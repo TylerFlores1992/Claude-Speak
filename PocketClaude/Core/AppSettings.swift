@@ -171,6 +171,13 @@ final class AppSettings: ObservableObject {
         didSet { defaults.set(wakePhrase, forKey: Keys.wakePhrase) }
     }
 
+    /// The last cloud session link used, so it does not have to be pasted
+    /// again. Not a secret: it identifies a session, and reaching it still
+    /// needs the relay's token and your Claude account.
+    @Published var lastCloudSessionLink: String {
+        didSet { defaults.set(lastCloudSessionLink, forKey: Keys.lastCloudSessionLink) }
+    }
+
     /// Speak the confirmation prompt for write actions out loud.
     @Published var speakConfirmations: Bool {
         didSet { defaults.set(speakConfirmations, forKey: Keys.speakConfirmations) }
@@ -199,6 +206,7 @@ final class AppSettings: ObservableObject {
         static let stemPressControl = "settings.stemPressControl"
         static let wakeWordEnabled = "settings.wakeWordEnabled"
         static let wakePhrase = "settings.wakePhrase"
+        static let lastCloudSessionLink = "settings.lastCloudSessionLink"
     }
 
     init(defaults: UserDefaults = .standard) {
@@ -233,6 +241,7 @@ final class AppSettings: ObservableObject {
         // Two words, both common, and unlikely as a pair in ordinary speech —
         // a one-word phrase fires on the radio.
         self.wakePhrase = defaults.string(forKey: Keys.wakePhrase) ?? "hey claude"
+        self.lastCloudSessionLink = defaults.string(forKey: Keys.lastCloudSessionLink) ?? ""
     }
 
     /// Split `owner/repo` into its parts. Returns nil when unset or malformed.

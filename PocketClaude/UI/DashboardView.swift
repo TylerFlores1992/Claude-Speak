@@ -7,10 +7,11 @@ import SwiftUI
 /// appears here and can be picked up from the phone. One repository has many
 /// sessions — every separate conversation you have had in it.
 ///
-/// Deliberately not a mirror of the Claude app's Chats. Those live on
-/// Anthropic's servers with no public API; reaching them would mean scraping
-/// the web app with account cookies. This shows what the relay can actually
-/// see, which is the work that matters when you walk away from the desk.
+/// The Claude app's cloud sessions are not here, because they run on
+/// Anthropic's infrastructure and nothing on this machine can see them. Nor is
+/// there an API that lists them. But they are reachable one at a time, through
+/// the CLI: the cloud button brings one across with `--teleport`, after which
+/// it is an ordinary local session and appears in this list like any other.
 struct DashboardView: View {
     @ObservedObject var viewModel: ConversationViewModel
 
@@ -25,6 +26,10 @@ struct DashboardView: View {
     @State private var teleportProject = ""
     @State private var teleportProblem: String?
     @State private var isTeleporting = false
+    @State private var cloudMessage = ""
+    @State private var isSendingToCloud = false
+    @State private var queuedSessionURL: URL?
+    @State private var sendProblem: String?
 
     private var grouped: [(project: String, sessions: [RelaySession])] {
         let matching = sessions.filter { session in
@@ -57,7 +62,14 @@ struct DashboardView: View {
             }
             Button("Cancel", role: .cancel) {}
         }
-        .sheet(isPresented: $isBringingCloudSession) { cloudSessionSheet }
+        .sheet(isPresented: $isBringingCloudSession) {
+            cloudSessionSheet
+                .onAppear {
+                    if cloudSessionLink.isEmpty {
+                        cloudSessionLink = viewModel.settings.lastCloudSessionLink
+                    }
+                }
+        }
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 Button { isBringingCloudSession = true } label: {
@@ -117,9 +129,49 @@ struct DashboardView: View {
                             if isTeleporting { ProgressView().controlSize(.small) }
                         }
                     }
-                    .disabled(isTeleporting || cloudSessionLink.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .disabled(isTeleporting || !hasCloudLink)
+                } header: {
+                    Text("Continue it here")
                 } footer: {
-                    Text("The conversation and its branch come across. The cloud environment — its variables, setup script, and network rules — does not; work continues in the relay machine's own environment.")
+                    Text("The conversation and its branch come across, and it becomes an ordinary session in the list above — answered out loud like any other. The cloud environment — its variables, setup script, and network rules — does not come with it; work continues in the relay machine's own environment.")
+                }
+
+                Section {
+                    TextField("Ask it to do something…", text: $cloudMessage, axis: .vertical)
+                        .lineLimit(1...5)
+
+                    Button {
+                        Task { await sendToCloudSession() }
+                    } label: {
+                        HStack {
+                            Text("Send without bringing it here")
+                            Spacer()
+                            if isSendingToCloud { ProgressView().controlSize(.small) }
+                        }
+                    }
+                    .disabled(
+                        isSendingToCloud
+                            || !hasCloudLink
+                            || cloudMessage.trimmingCharacters(in: .whitespaces).isEmpty
+                    )
+
+                    if let queuedSessionURL {
+                        Link(destination: queuedSessionURL) {
+                            Label("Queued — open in Claude", systemImage: "arrow.up.forward.app")
+                        }
+                    }
+
+                    if let sendProblem {
+                        Label(sendProblem, systemImage: "exclamationmark.triangle.fill")
+                            .font(.footnote)
+                            .foregroundStyle(.orange)
+                    }
+                } header: {
+                    Text("Leave it there")
+                } footer: {
+                    // Stated plainly because the shape is unusual and the
+                    // alternative is waiting for a reply that is not coming.
+                    Text("Queues a message into the session where it already runs, and returns straight away. No answer comes back here — the CLI posts and exits — so read it in the Claude app. Useful for starting something on the way out the door. The mic on the keyboard works for dictating it.")
                 }
             }
             .navigationTitle("Cloud session")
@@ -132,6 +184,30 @@ struct DashboardView: View {
         }
     }
 
+    private var hasCloudLink: Bool {
+        !cloudSessionLink.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func sendToCloudSession() async {
+        sendProblem = nil
+        queuedSessionURL = nil
+        isSendingToCloud = true
+        defer { isSendingToCloud = false }
+
+        let link = cloudSessionLink.trimmingCharacters(in: .whitespacesAndNewlines)
+        do {
+            queuedSessionURL = try await viewModel.sendToCloud(
+                link: link,
+                text: cloudMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+            )
+            viewModel.settings.lastCloudSessionLink = link
+            cloudMessage = ""
+        } catch {
+            sendProblem = (error as? LocalizedError)?.errorDescription
+                ?? error.localizedDescription
+        }
+    }
+
     private func bringCloudSession() async {
         teleportProblem = nil
         isTeleporting = true
@@ -141,6 +217,8 @@ struct DashboardView: View {
                 link: cloudSessionLink.trimmingCharacters(in: .whitespacesAndNewlines),
                 project: teleportProject
             )
+            viewModel.settings.lastCloudSessionLink = cloudSessionLink
+                .trimmingCharacters(in: .whitespacesAndNewlines)
             cloudSessionLink = ""
             isBringingCloudSession = false
             // It is a local session now, so the ordinary list is where it shows.

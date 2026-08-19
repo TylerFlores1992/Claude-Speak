@@ -461,6 +461,19 @@ final class ConversationViewModel: ObservableObject {
         try await client.teleport(sessionID: link, project: project)
     }
 
+    /// Queues a message into a cloud session without bringing it here.
+    ///
+    /// Returns the session's URL, and no answer, because the CLI returns no
+    /// answer: `claude -p --cloud` posts the message and exits. Use this to
+    /// start work you will read later in the Claude app; teleport the session
+    /// instead if you want it answered in your ear.
+    func sendToCloud(link: String, text: String) async throws -> URL? {
+        guard let client = RelayClient.make(settings: settings) else {
+            throw RelayError.notConfigured
+        }
+        return try await client.sendToCloud(sessionID: link, text: text)
+    }
+
     /// Picks up a Claude Code session that already exists on the relay machine,
     /// including one started at the keyboard.
     ///
