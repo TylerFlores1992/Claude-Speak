@@ -1,13 +1,13 @@
 # Runs the relay, and restarts it after an update.
 #
-# The relay exits with code 42 when it has pulled new code. Anything else — a
-# crash, or Ctrl+C — stops for good, so a broken build fails loudly instead of
+# The relay exits with code 42 when it has pulled new code. Anything else - a
+# crash, or Ctrl+C - stops for good, so a broken build fails loudly instead of
 # restarting in a loop forever.
 #
 # Use this rather than `node server.mjs` directly if you want the "Update relay"
 # button in the app to work. Without a supervisor the relay can pull new code
 # but has no way to start running it, which leaves the old version running with
-# the new version on disk — the confusing half-state worth avoiding.
+# the new version on disk - the confusing half-state worth avoiding.
 
 $ErrorActionPreference = "Stop"
 $server = Join-Path $PSScriptRoot "server.mjs"
@@ -17,7 +17,7 @@ $server = Join-Path $PSScriptRoot "server.mjs"
 # The relay reads its settings from the environment, and `$env:RELAY_TOKEN =
 # "..."` only lasts as long as the window you typed it in. Opening a fresh
 # PowerShell and running this script then fails with "RELAY_TOKEN is required",
-# which reads as a broken relay rather than a missing variable — so resolve it
+# which reads as a broken relay rather than a missing variable - so resolve it
 # here, and save it where a new window will find it.
 #
 # Order: this process, then the persisted user value, then the machine value.
@@ -42,7 +42,7 @@ if (-not $token) {
 
     # -AsSecureString so a shared screen or a scrollback buffer never shows the
     # token. Reading it back needs an unmanaged buffer, which has to be zeroed
-    # and freed by hand — .NET will not do it, and the token would otherwise sit
+    # and freed by hand - .NET will not do it, and the token would otherwise sit
     # in process memory for the life of the relay.
     $entered = Read-Host "Relay token" -AsSecureString
     $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($entered)
@@ -69,20 +69,20 @@ if (-not $token) {
 }
 
 # Hand every resolved setting to the child process explicitly. Without this a
-# value that only exists in the registry — saved by setup.ps1, or by the prompt
-# above — is not in $env: and node never sees it.
+# value that only exists in the registry - saved by setup.ps1, or by the prompt
+# above - is not in $env: and node never sees it.
 $env:RELAY_TOKEN = $token
 foreach ($name in @("RELAY_REPO", "RELAY_PORT", "RELAY_MODEL", "RELAY_PROJECTS", "RELAY_SCRATCH")) {
     $value = Resolve-Setting $name
     if ($value) { Set-Item -Path "env:$name" -Value $value }
 }
 
-# RELAY_REPO is not required — the relay falls back to its own directory — but
+# RELAY_REPO is not required - the relay falls back to its own directory - but
 # that fallback silently points Claude at the relay's checkout instead of the
 # repository you meant, and the answers look plausible while being about the
 # wrong code. Worth a warning, not a failure.
 if (-not $env:RELAY_REPO) {
-    Write-Host "RELAY_REPO is not set — the relay will work on $PWD." -ForegroundColor Yellow
+    Write-Host "RELAY_REPO is not set - the relay will work on $PWD." -ForegroundColor Yellow
     Write-Host "Set it with:  [Environment]::SetEnvironmentVariable('RELAY_REPO', 'C:\code\campsite-finder', 'User')" -ForegroundColor Yellow
     Write-Host ""
 }
