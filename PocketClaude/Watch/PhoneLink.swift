@@ -108,12 +108,31 @@ extension PhoneLink: WCSessionDelegate {
         }
     }
 
-    /// Best-effort message back to the watch. A transfer has no reply channel,
-    /// and the watch may have gone to sleep, so failing to deliver a status
-    /// line is not worth surfacing anywhere.
+    /// Sends a status line or an answer back to the watch.
+    ///
+    /// `sendMessage` only works while the watch is reachable, and it stops
+    /// being reachable the moment a wrist drops and the screen sleeps - which
+    /// is exactly when an answer arrives, since answering takes a while. The
+    /// first version returned early in that case, so the answer was dropped and
+    /// the watch sat disabled waiting for a message that had been thrown away.
+    ///
+    /// `transferUserInfo` queues instead, and the system delivers it when the
+    /// watch comes back. Slower, never silent.
     private nonisolated static func reply(_ payload: [String: Any]) {
-        guard WCSession.default.isReachable else { return }
-        WCSession.default.sendMessage(payload, replyHandler: nil, errorHandler: { _ in })
+        if WCSession.default.isReachable {
+            WCSession.default.sendMessage(
+                payload,
+                replyHandler: nil,
+                // Reachable is a snapshot, not a guarantee - it can lapse
+                // between the check and the send. Falling back rather than
+                // giving up keeps that race from eating an answer.
+                errorHandler: { _ in
+                    WCSession.default.transferUserInfo(payload)
+                }
+            )
+        } else {
+            WCSession.default.transferUserInfo(payload)
+        }
     }
 
     /// Transcribes a recorded file.
