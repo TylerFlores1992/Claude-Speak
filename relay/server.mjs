@@ -214,7 +214,23 @@ function sse(res, event, payload) {
   res.write(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`);
 }
 
-function buildArgs({ text, sessionId }) {
+// What the phone is allowed to ask for. Allowlists rather than pass-through:
+// both values become command-line arguments, and "opus --dangerously-skip-
+// permissions" must not be reachable by typing it into a picker.
+const ALLOWED_MODELS = new Set([
+  "opus", "sonnet", "haiku", "fable",
+  "claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5",
+]);
+const ALLOWED_EFFORTS = new Set(["low", "medium", "high", "xhigh", "max"]);
+
+/** The requested value if it is one we permit, otherwise null. */
+function allowedOrNull(value, permitted) {
+  if (typeof value !== "string") return null;
+  const cleaned = value.trim().toLowerCase();
+  return permitted.has(cleaned) ? cleaned : null;
+}
+
+function buildArgs({ text, sessionId, model, effort }) {
   const args = ["-p", text];
   // --resume keeps the conversation going across questions. Claude Code finds
   // the session by ID in any project on the machine.
@@ -222,7 +238,16 @@ function buildArgs({ text, sessionId }) {
   args.push("--output-format", "stream-json", "--verbose", "--include-partial-messages");
   args.push("--permission-mode", PERMISSION_MODE);
   if (ALLOWED_TOOLS) args.push("--allowedTools", ALLOWED_TOOLS);
-  if (MODEL) args.push("--model", MODEL);
+
+  // The phone's choice wins over the server default, because the phone is
+  // where the chip that claims to control it lives. Until now that chip said
+  // "Opus 5 High" while the relay ran whatever RELAY_MODEL happened to be -
+  // usually sonnet, since setup.ps1 sets it. A control that does nothing is
+  // worse than no control.
+  const requestedModel = allowedOrNull(model, ALLOWED_MODELS);
+  const requestedEffort = allowedOrNull(effort, ALLOWED_EFFORTS);
+  if (requestedModel ?? MODEL) args.push("--model", requestedModel ?? MODEL);
+  if (requestedEffort) args.push("--effort", requestedEffort);
   return args;
 }
 
@@ -299,6 +324,8 @@ async function handleAsk(req, res) {
   const sessionId = typeof payload.sessionId === "string" && payload.sessionId
     ? payload.sessionId
     : null;
+  const model = typeof payload.model === "string" ? payload.model : "";
+  const effort = typeof payload.effort === "string" ? payload.effort : "";
 
   if (!text) {
     res.writeHead(400, { "content-type": "application/json" });
@@ -330,7 +357,7 @@ async function handleAsk(req, res) {
     "x-accel-buffering": "no",
   });
 
-  const child = spawn(CLAUDE_BIN, buildArgs({ text, sessionId }), {
+  const child = spawn(CLAUDE_BIN, buildArgs({ text, sessionId, model, effort }), {
     cwd: workingDirectory,
     // Inherit the environment so the CLI finds your logged-in credentials.
     env: process.env,
@@ -573,6 +600,87 @@ async function readJSON(req) {
 //
 // Teleport is the one that gives a phone the whole loop, because after it runs
 // there is nothing special about the session any more.
+
+// Remote Control.
+//
+// The closest thing to "two machines on one session". `claude -p`, which is how
+// every question here is answered, is one-shot: it runs, streams, and exits, so
+// there is nothing for another device to watch. `claude remote-control` is a
+// server that keeps sessions alive and serves them to claude.ai/code and the
+// Claude app, which is what makes a session watchable step by step from
+// somewhere else while this relay drives it.
+//
+// This is deliberately not `claude --cloud <id>` attach. That does attach a
+// terminal to a running cloud session, but it is gated on a gradual rollout and
+// the docs state plainly that --output-format stream-json is not supported with
+// it - so the relay could attach and then have no way to stream anything to a
+// phone. A feature that cannot report what it is doing is not one this app can
+// use.
+
+let remoteControl = null; // { child, url, startedAt }
+
+/** The claude.ai session URL, once the server prints one. */
+function extractSessionURL(text) {
+  const match = String(text).match(/https:\/\/claude\.ai\/code\/[A-Za-z0-9_-]+/);
+  return match ? match[0] : null;
+}
+
+function startRemoteControl(cwd) {
+  if (remoteControl?.child && remoteControl.child.exitCode === null) {
+    return remoteControl;
+  }
+
+  const child = spawn(CLAUDE_BIN, ["remote-control"], {
+    cwd,
+    env: process.env,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  remoteControl = { child, url: null, startedAt: new Date().toISOString(), error: null };
+
+  // The URL is printed, not returned, so it has to be read out of the output.
+  const read = (chunk) => {
+    const text = chunk.toString();
+    const url = extractSessionURL(text);
+    if (url && remoteControl) remoteControl.url = url;
+  };
+  child.stdout.on("data", read);
+  child.stderr.on("data", (chunk) => {
+    read(chunk);
+    // Eligibility failures land here, and they are the common case: Remote
+    // Control is a research preview behind a feature flag. Keeping the text
+    // means the phone can show the real reason instead of "it didn't work".
+    if (remoteControl) {
+      remoteControl.error = (remoteControl.error ?? "") + chunk.toString();
+    }
+  });
+  child.on("exit", (code) => {
+    if (remoteControl?.child === child) remoteControl.exited = code;
+  });
+
+  return remoteControl;
+}
+
+function remoteControlStatus() {
+  if (!remoteControl) return { running: false };
+  const running = remoteControl.child && remoteControl.child.exitCode === null;
+  return {
+    running: Boolean(running),
+    url: remoteControl.url,
+    startedAt: remoteControl.startedAt,
+    exited: remoteControl.exited ?? null,
+    // Last few lines only: the whole stderr of a failed launch is a wall.
+    error: (remoteControl.error ?? "").split("\n").filter(Boolean).slice(-4).join(" ").trim() || null,
+  };
+}
+
+function stopRemoteControl() {
+  if (remoteControl?.child && remoteControl.child.exitCode === null) {
+    remoteControl.child.kill();
+  }
+  remoteControl = null;
+  return { running: false };
+}
 
 // Remembered cloud sessions.
 //
@@ -921,6 +1029,33 @@ const server = createServer((req, res) => {
     return;
   }
 
+  if (req.method === "GET" && req.url === "/remote-control") {
+    respond(res, 200, remoteControlStatus());
+    return;
+  }
+
+  if (req.method === "POST" && req.url === "/remote-control") {
+    readJSON(req)
+      .then((body) => {
+        const cwd = resolveProject(typeof body.project === "string" ? body.project : "");
+        if (!cwd) return respond(res, 400, { error: "Unknown workspace." });
+        startRemoteControl(cwd);
+        // The URL arrives on stdout a moment after launch, so the first status
+        // often has none. Reported as-is rather than waited for: a request that
+        // blocks on a subprocess printing something is a request that hangs
+        // when it does not.
+        setTimeout(() => {}, 0);
+        respond(res, 200, remoteControlStatus());
+      })
+      .catch((error) => respond(res, 400, { error: error.message }));
+    return;
+  }
+
+  if (req.method === "POST" && req.url === "/remote-control/stop") {
+    respond(res, 200, stopRemoteControl());
+    return;
+  }
+
   if (req.method === "GET" && req.url === "/cloud") {
     const state = loadCloud();
     respond(res, 200, {
@@ -1066,6 +1201,7 @@ export {
   resolveProject,
   cleanTitle,
   resolveSessionCwd,
+  extractSessionURL,
   parseCloudSessionId,
   cloudSendArgs,
   teleportArgs,

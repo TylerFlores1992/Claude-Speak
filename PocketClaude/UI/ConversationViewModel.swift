@@ -474,6 +474,24 @@ final class ConversationViewModel: ObservableObject {
         try await client.teleport(sessionID: link, project: project)
     }
 
+    /// Whether the relay is serving its session to claude.ai and the Claude app.
+    func remoteControlStatus() async throws -> RelayClient.RemoteControlState {
+        guard let client = RelayClient.make(settings: settings) else {
+            throw RelayError.notConfigured
+        }
+        return try await client.remoteControlStatus()
+    }
+
+    /// Starts or stops Remote Control on the relay machine.
+    func setRemoteControl(_ on: Bool, project: String = "") async throws -> RelayClient.RemoteControlState {
+        guard let client = RelayClient.make(settings: settings) else {
+            throw RelayError.notConfigured
+        }
+        return on
+            ? try await client.startRemoteControl(project: project)
+            : try await client.stopRemoteControl()
+    }
+
     /// Cloud sessions the relay has pulled down before.
     func cloudSessions() async throws -> [CloudSession] {
         guard let client = RelayClient.make(settings: settings) else {
@@ -585,7 +603,9 @@ final class ConversationViewModel: ObservableObject {
             let result = try await client.ask(
                 text: text,
                 sessionID: session.relaySessionID,
-                project: projectToSend
+                project: projectToSend,
+                model: settings.model.rawValue,
+                effort: settings.model.supportsAdaptiveThinking ? settings.effort.rawValue : ""
             ) { [weak self] event in
                 self?.handleRelay(event, streaming: streaming)
             }

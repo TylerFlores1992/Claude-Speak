@@ -18,6 +18,12 @@ final class WatchLink: NSObject, ObservableObject {
     @Published private(set) var isBusy = false
     @Published private(set) var isError = false
 
+    /// Clears `isBusy` if nothing comes back. Without it, one lost message
+    /// leaves the Ask button greyed out for the life of the app - which is
+    /// exactly what happened when the phone dropped answers to an unreachable
+    /// watch.
+    private var watchdog: Task<Void, Never>?
+
     override init() {
         super.init()
         guard WCSession.isSupported() else { return }
@@ -30,9 +36,22 @@ final class WatchLink: NSObject, ObservableObject {
         isError = false
         status = "Sending…"
         WCSession.default.transferFile(url, metadata: ["kind": "question"])
+
+        // Generous: a real agent turn can take minutes, and cutting it short
+        // would say "no answer" while one was still being written. This is a
+        // stuck-button guard, not a deadline.
+        watchdog?.cancel()
+        watchdog = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 5 * 60 * 1_000_000_000)
+            guard !Task.isCancelled else { return }
+            guard let self, self.isBusy else { return }
+            self.fail("No answer came back. Tap Ask to try again.")
+        }
     }
 
     private func fail(_ message: String) {
+        watchdog?.cancel()
+        watchdog = nil
         isError = true
         isBusy = false
         status = message
@@ -68,22 +87,34 @@ extension WatchLink: WCSessionDelegate {
 
     /// The answer, sent back separately because a file transfer has no reply.
     nonisolated func session(_ session: WCSession, didReceiveMessage message: [String: Any]) {
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            if let answer = message["answer"] as? String, !answer.isEmpty {
-                self.isBusy = false
-                self.isError = false
-                // The phone speaks the full answer through your earbud. This is
-                // only so the wrist shows something happened.
-                self.status = answer
-            } else if let heard = message["heard"] as? String, !heard.isEmpty {
-                // Still working. Stays busy on purpose: this only confirms what
-                // was understood, and clearing the spinner here would say the
-                // question was answered when it has not been asked yet.
-                self.status = "\u{201C}\(heard)\u{201D}"
-            } else if let problem = message["error"] as? String {
-                self.fail(problem)
-            }
+        Task { @MainActor [weak self] in self?.handle(message) }
+    }
+
+    /// The same payload, queued rather than sent live. This is the route an
+    /// answer takes when the watch was asleep when it was ready.
+    nonisolated func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any]) {
+        Task { @MainActor [weak self] in self?.handle(userInfo) }
+    }
+
+    /// One place both delivery routes land, so a live message and a queued one
+    /// cannot drift apart in how they are handled.
+    @MainActor
+    private func handle(_ message: [String: Any]) {
+        if let answer = message["answer"] as? String, !answer.isEmpty {
+            watchdog?.cancel()
+            watchdog = nil
+            isBusy = false
+            isError = false
+            // The phone speaks the full answer through your earbud. This is
+            // only so the wrist shows something happened.
+            status = answer
+        } else if let heard = message["heard"] as? String, !heard.isEmpty {
+            // Still working. Stays busy on purpose: this only confirms what was
+            // understood, and clearing the spinner here would claim the
+            // question was answered when it has not been asked yet.
+            status = "\u{201C}\(heard)\u{201D}"
+        } else if let problem = message["error"] as? String {
+            fail(problem)
         }
     }
 }

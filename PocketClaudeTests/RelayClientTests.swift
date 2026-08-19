@@ -301,4 +301,34 @@ final class RelayClientTests: XCTestCase {
         let suite = UserDefaults(suiteName: "relay-tests-\(UUID().uuidString)")!
         return suite
     }
+
+    // MARK: - Model and effort
+
+    func testSendsTheChosenModelAndEffort() throws {
+        // The composer chip claimed to control these and did not: the relay
+        // only ever read its own RELAY_MODEL, so a phone set to Opus was
+        // answered by whatever the server was configured with.
+        let client = RelayClient(baseURL: URL(string: "http://relay.test:8788")!, token: "t")
+        let request = try client.makeRequest(
+            text: "hello",
+            sessionID: nil,
+            model: "claude-opus-5",
+            effort: "high"
+        )
+        let body = try XCTUnwrap(request.httpBody)
+        let json = try JSONDecoder().decode(JSONValue.self, from: body)
+        XCTAssertEqual(json["model"]?.stringValue, "claude-opus-5")
+        XCTAssertEqual(json["effort"]?.stringValue, "high")
+    }
+
+    func testOmitsModelAndEffortWhenUnset() throws {
+        // Omitted rather than empty, so the relay falls back to its own
+        // configuration instead of being handed "" to act on.
+        let client = RelayClient(baseURL: URL(string: "http://relay.test:8788")!, token: "t")
+        let request = try client.makeRequest(text: "hello", sessionID: nil)
+        let body = try XCTUnwrap(request.httpBody)
+        let json = try JSONDecoder().decode(JSONValue.self, from: body)
+        XCTAssertNil(json["model"])
+        XCTAssertNil(json["effort"])
+    }
 }
