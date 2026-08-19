@@ -21,6 +21,8 @@ import {
   resolveProject,
   cleanTitle,
   resolveSessionCwd,
+  sessionFilePath,
+  parseLiveIds,
   extractSessionURL,
   parseCloudSessionId,
   cloudSendArgs,
@@ -574,6 +576,48 @@ test("a message that looks like a flag is still a message", () => {
   const args = cloudSendArgs("session_01abcdef2345", "--help");
   assert.equal(args[0], "-p");
   assert.equal(args[1], "--help");
+});
+
+// --- Deleting sessions -----------------------------------------------------
+//
+// The id is phone-supplied and ends up naming a file to unlink, so the
+// resolver is a security boundary: it matches ids against files that already
+// exist under ~/.claude/projects and refuses anything shaped like a path.
+
+test("a traversal attempt never resolves to a file", () => {
+  for (const attempt of [
+    "../../etc/passwd",
+    "..\\..\\secrets",
+    "a/b",
+    "a\\b",
+    "..",
+    "",
+    null,
+    undefined,
+  ]) {
+    assert.equal(sessionFilePath(attempt), null, `resolved ${JSON.stringify(attempt)}`);
+  }
+});
+
+test("an unknown id resolves to nothing rather than a guess", () => {
+  assert.equal(sessionFilePath("00000000-0000-0000-0000-000000000000"), null);
+});
+
+// --- Live sessions ---------------------------------------------------------
+//
+// `claude agents --json` has no documented schema, so the parser reads
+// defensively. Over-matching costs a wrong "live" dot; throwing would cost the
+// whole session list.
+
+test("live ids are found across plausible schemas", () => {
+  assert.deepEqual([...parseLiveIds('[{"sessionId":"a"},{"id":"b"}]')], ["a", "b"]);
+  assert.deepEqual([...parseLiveIds('{"agents":[{"session_id":"c"}]}')], ["c"]);
+});
+
+test("garbage output means nothing is live, not a crash", () => {
+  for (const raw of ["", "not json", "42", "null", "{}", '[{"name":"x"}]']) {
+    assert.equal(parseLiveIds(raw).size, 0, `failed on ${JSON.stringify(raw)}`);
+  }
 });
 
 // --- Remote Control --------------------------------------------------------

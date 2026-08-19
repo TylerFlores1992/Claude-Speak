@@ -12,6 +12,10 @@ struct RelaySession: Identifiable, Equatable, Sendable {
     let project: String
     let projectPath: String
     let updatedAt: Date
+    /// Running right now — usually being served to claude.ai by Remote
+    /// Control. Resuming one is walking into a live conversation, not
+    /// reopening a transcript.
+    let isLive: Bool
 
     /// Sessions in an empty scratch directory aren't about code.
     var isChat: Bool { project.lowercased() == "chat" || projectPath.hasSuffix("pocketclaude-chat") }
@@ -75,7 +79,8 @@ extension RelayClient {
                 // Fractional seconds are present in practice, but a relay on a
                 // different platform may drop them; falling back beats showing
                 // every session as 1970.
-                updatedAt: formatter.date(from: stamp) ?? plain.date(from: stamp) ?? .distantPast
+                updatedAt: formatter.date(from: stamp) ?? plain.date(from: stamp) ?? .distantPast,
+                isLive: entry["live"]?.boolValue ?? false
             )
         }
     }
@@ -151,6 +156,25 @@ extension RelayClient {
         var body: [String: JSONValue] = ["sessionId": .string(sessionID)]
         if !project.isEmpty { body["project"] = .string(project) }
         let json = try await post(path: "teleport", body: body, timeout: 200)
+        if let problem = json["error"]?.stringValue, !problem.isEmpty {
+            throw RelayError.relay(problem)
+        }
+    }
+
+    /// Hides a session from the list. The transcript stays on the relay
+    /// machine and `claude --resume` still works at a keyboard — it has only
+    /// left this list.
+    func archiveSession(id: String) async throws {
+        let json = try await post(path: "sessions/archive", body: ["id": .string(id)], timeout: 15)
+        if let problem = json["error"]?.stringValue, !problem.isEmpty {
+            throw RelayError.relay(problem)
+        }
+    }
+
+    /// Deletes a session's transcript file. Not undoable, which is why the UI
+    /// confirms first and archive is the swipe that doesn't.
+    func deleteSession(id: String) async throws {
+        let json = try await post(path: "sessions/delete", body: ["id": .string(id)], timeout: 15)
         if let problem = json["error"]?.stringValue, !problem.isEmpty {
             throw RelayError.relay(problem)
         }

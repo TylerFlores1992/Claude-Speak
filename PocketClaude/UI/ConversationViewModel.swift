@@ -481,6 +481,22 @@ final class ConversationViewModel: ObservableObject {
         try await client.teleport(sessionID: link, project: project)
     }
 
+    /// Hides a session from the dashboard without touching its transcript.
+    func archiveSession(id: String) async throws {
+        guard let client = RelayClient.make(settings: settings) else {
+            throw RelayError.notConfigured
+        }
+        try await client.archiveSession(id: id)
+    }
+
+    /// Deletes a session's transcript on the relay machine. Not undoable.
+    func deleteSession(id: String) async throws {
+        guard let client = RelayClient.make(settings: settings) else {
+            throw RelayError.notConfigured
+        }
+        try await client.deleteSession(id: id)
+    }
+
     /// Whether the relay is serving its session to claude.ai and the Claude app.
     func remoteControlStatus() async throws -> RelayClient.RemoteControlState {
         guard let client = RelayClient.make(settings: settings) else {
