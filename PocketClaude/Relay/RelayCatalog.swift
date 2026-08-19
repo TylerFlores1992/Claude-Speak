@@ -94,9 +94,19 @@ extension RelayClient {
         let changed = json["changed"]?.boolValue ?? false
         let before = json["before"]?.stringValue ?? "?"
         let after = json["after"]?.stringValue ?? "?"
+        // Absent on an older relay. Assuming supervised there keeps the message
+        // the same as it has always been rather than warning about nothing.
+        let supervised = json["supervised"]?.boolValue ?? true
+
+        if !changed { return ("Already up to date (\(after)).", false) }
+        if supervised {
+            return ("Updated \(before) → \(after). The relay is restarting.", true)
+        }
         return (
-            changed ? "Updated \(before) → \(after). The relay is restarting." : "Already up to date (\(after)).",
-            changed
+            "Updated \(before) → \(after), but the relay isn't running under run.ps1, "
+                + "so it can't restart itself and is still on the old code. "
+                + "Stop it and run .\\relay\\run.ps1.",
+            true
         )
     }
 

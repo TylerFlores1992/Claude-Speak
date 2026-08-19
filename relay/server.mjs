@@ -31,6 +31,10 @@ const AUTO_TITLE = (process.env.RELAY_AUTO_TITLE ?? "1") !== "0";
 // each one spawns a process: naming sixty at once on the first refresh would
 // be indistinguishable from a fork bomb.
 const TITLES_PER_REFRESH = Number(process.env.RELAY_TITLES_PER_REFRESH ?? 5);
+// Set by run.ps1. The relay cannot restart itself: exiting is only a restart if
+// something is watching for the exit. Without this flag it exits into nothing
+// after an update and simply looks dead, which is exactly what happened.
+const SUPERVISED = process.env.RELAY_SUPERVISED === "1";
 const MODEL = process.env.RELAY_MODEL ?? "";
 const TIMEOUT_MS = Number(process.env.RELAY_TIMEOUT_MS ?? 300_000);
 
@@ -631,11 +635,22 @@ const server = createServer((req, res) => {
       return;
     }
     res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify(result));
-    if (result.changed) {
+    res.end(JSON.stringify({ ...result, supervised: SUPERVISED }));
+
+    if (result.changed && SUPERVISED) {
       // After the response is flushed, so the phone hears the outcome before
       // the process goes away.
       res.on("finish", () => setTimeout(() => process.exit(42), 250));
+    } else if (result.changed) {
+      // Unsupervised: keep running the old code rather than exiting into
+      // nothing. Still the old code, and said out loud in both places, because
+      // a relay that vanishes mid-conversation is worse than one that is
+      // honestly out of date.
+      console.log(
+        `\nUpdated ${result.before} -> ${result.after}, but this relay was not started by run.ps1,\n` +
+        `so it cannot restart itself. It is still running the old code.\n` +
+        `Stop it and run:  .\\relay\\run.ps1\n`
+      );
     }
     return;
   }
