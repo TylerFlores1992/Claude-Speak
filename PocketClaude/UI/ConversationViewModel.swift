@@ -392,7 +392,7 @@ final class ConversationViewModel: ObservableObject {
                 if !hasCued {
                     // The same cue as a squeeze, so "it heard me" sounds the
                     // same however the take started.
-                    Cues.startedListening()
+                    Cues.listening()
                     hasCued = true
                 }
                 if question != lastQuestion {
