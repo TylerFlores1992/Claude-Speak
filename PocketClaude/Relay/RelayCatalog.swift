@@ -150,7 +150,44 @@ extension RelayClient {
     func teleport(sessionID: String, project: String = "") async throws {
         var body: [String: JSONValue] = ["sessionId": .string(sessionID)]
         if !project.isEmpty { body["project"] = .string(project) }
-        _ = try await post(path: "teleport", body: body, timeout: 200)
+        let json = try await post(path: "teleport", body: body, timeout: 200)
+        if let problem = json["error"]?.stringValue, !problem.isEmpty {
+            throw RelayError.relay(problem)
+        }
+    }
+
+    /// Whether the relay is serving a session to claude.ai and the Claude app.
+    struct RemoteControlState: Equatable, Sendable {
+        var running: Bool
+        var url: URL?
+        var problem: String?
+    }
+
+    func remoteControlStatus() async throws -> RemoteControlState {
+        parseRemoteControl(try await getJSON(path: "remote-control"))
+    }
+
+    /// Starts the Remote Control server on the relay machine.
+    ///
+    /// This is what makes a session watchable from somewhere else while the
+    /// phone drives it: claude.ai/code and the Claude app connect to the
+    /// session running here, so the same conversation is visible on both.
+    func startRemoteControl(project: String = "") async throws -> RemoteControlState {
+        var body: [String: JSONValue] = [:]
+        if !project.isEmpty { body["project"] = .string(project) }
+        return parseRemoteControl(try await post(path: "remote-control", body: body, timeout: 30))
+    }
+
+    func stopRemoteControl() async throws -> RemoteControlState {
+        parseRemoteControl(try await post(path: "remote-control/stop", body: [:], timeout: 20))
+    }
+
+    private func parseRemoteControl(_ json: JSONValue) -> RemoteControlState {
+        RemoteControlState(
+            running: json["running"]?.boolValue ?? false,
+            url: (json["url"]?.stringValue).flatMap(URL.init(string:)),
+            problem: json["error"]?.stringValue
+        )
     }
 
     /// Cloud sessions this relay has pulled down before.
@@ -206,6 +243,12 @@ extension RelayClient {
             body: ["sessionId": .string(sessionID), "text": .string(text)],
             timeout: 70
         )
+        // Checked here rather than in `post`, which no longer treats an "error"
+        // field as fatal: Remote Control reports why it could not start in that
+        // field on an otherwise successful request. This endpoint means it.
+        if let problem = json["error"]?.stringValue, !problem.isEmpty {
+            throw RelayError.relay(problem)
+        }
         return (json["url"]?.stringValue).flatMap(URL.init(string:))
     }
 
@@ -237,9 +280,10 @@ extension RelayClient {
                 json["error"]?.stringValue ?? "The relay refused that (HTTP \(http.statusCode))."
             )
         }
-        if let problem = json["error"]?.stringValue, !problem.isEmpty {
-            throw RelayError.relay(problem)
-        }
+        // Deliberately not throwing on an "error" field here. Remote Control
+        // reports why it could not start in that field while the request
+        // itself succeeded, and the phone needs to show that reason rather
+        // than a generic failure. Callers that want it fatal check it.
         return json
     }
 

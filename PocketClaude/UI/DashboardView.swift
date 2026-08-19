@@ -33,6 +33,8 @@ struct DashboardView: View {
     @State private var cloudSessions: [CloudSession] = []
     @State private var isRefreshingCloud = false
     @State private var refreshSummary: String?
+    @State private var remoteControl = RelayClient.RemoteControlState(running: false)
+    @State private var isTogglingRemoteControl = false
 
     private var grouped: [(project: String, sessions: [RelaySession])] {
         let matching = sessions.filter { session in
@@ -72,7 +74,11 @@ struct DashboardView: View {
                         cloudSessionLink = viewModel.settings.lastCloudSessionLink
                     }
                 }
-                .task { await loadCloudSessions() }
+                .task {
+                    await loadCloudSessions()
+                    remoteControl = (try? await viewModel.remoteControlStatus())
+                        ?? RelayClient.RemoteControlState(running: false)
+                }
         }
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
@@ -138,6 +144,36 @@ struct DashboardView: View {
                     Text("Continue it here")
                 } footer: {
                     Text("The conversation and its branch come across, and it becomes an ordinary session in the list above — answered out loud like any other. The cloud environment — its variables, setup script, and network rules — does not come with it; work continues in the relay machine's own environment.")
+                }
+
+                Section {
+                    Toggle("Watch from claude.ai and the Claude app", isOn: Binding(
+                        get: { remoteControl.running },
+                        set: { on in Task { await setRemoteControl(on) } }
+                    ))
+                    .disabled(isTogglingRemoteControl)
+
+                    if let url = remoteControl.url {
+                        Link(destination: url) {
+                            Label("Open the live session", systemImage: "arrow.up.forward.app")
+                        }
+                    } else if remoteControl.running {
+                        Text("Starting — the link appears once the server reports it.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    if let problem = remoteControl.problem {
+                        Label(problem, systemImage: "exclamationmark.triangle.fill")
+                            .font(.footnote)
+                            .foregroundStyle(.orange)
+                    }
+                } header: {
+                    Text("Watch live")
+                } footer: {
+                    // The distinction that matters, and the one I got wrong
+                    // first: teleport copies, this connects.
+                    Text("Brings up Remote Control on the relay machine, so the session it is running shows up in claude.ai/code and the Claude app — the same conversation, live, while you drive it by voice from here. This is the closest thing to two machines on one session: bringing a cloud session here copies it, this shares it. Remote Control is a research preview, so it may report that it isn't enabled for your account.")
                 }
 
                 if !cloudSessions.isEmpty {
@@ -222,6 +258,27 @@ struct DashboardView: View {
                     Button("Cancel") { isBringingCloudSession = false }
                 }
             }
+        }
+    }
+
+    private func setRemoteControl(_ on: Bool) async {
+        isTogglingRemoteControl = true
+        defer { isTogglingRemoteControl = false }
+        do {
+            remoteControl = try await viewModel.setRemoteControl(on, project: teleportProject)
+            // The URL is printed by the server a moment after launch, so the
+            // first reply usually has none. One poll covers the gap without
+            // making the request itself wait on a subprocess.
+            if on, remoteControl.url == nil {
+                try? await Task.sleep(nanoseconds: 2_500_000_000)
+                remoteControl = (try? await viewModel.remoteControlStatus()) ?? remoteControl
+            }
+        } catch {
+            remoteControl = RelayClient.RemoteControlState(
+                running: false,
+                url: nil,
+                problem: (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            )
         }
     }
 

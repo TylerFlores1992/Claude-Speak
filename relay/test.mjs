@@ -21,6 +21,7 @@ import {
   resolveProject,
   cleanTitle,
   resolveSessionCwd,
+  extractSessionURL,
   parseCloudSessionId,
   cloudSendArgs,
   teleportArgs,
@@ -573,6 +574,33 @@ test("a message that looks like a flag is still a message", () => {
   const args = cloudSendArgs("session_01abcdef2345", "--help");
   assert.equal(args[0], "-p");
   assert.equal(args[1], "--help");
+});
+
+// --- Remote Control --------------------------------------------------------
+//
+// The server prints its session URL rather than returning it, so the relay has
+// to read it out of the output. Worth testing because the surrounding text
+// changes between versions and a wrong match would hand the phone a link to
+// nothing.
+
+test("finds the session URL in the server's output", () => {
+  assert.equal(
+    extractSessionURL("Remote Control active: https://claude.ai/code/session_01AbCd"),
+    "https://claude.ai/code/session_01AbCd"
+  );
+  // Query strings are printed in some forms and are not part of the link.
+  assert.equal(
+    extractSessionURL("View: https://claude.ai/code/cse_01AbCd?from=cli&m=0"),
+    "https://claude.ai/code/cse_01AbCd"
+  );
+});
+
+test("returns null when there is no URL yet", () => {
+  // Startup prints several lines before the URL; a false match here would show
+  // a dead link on the phone.
+  for (const line of ["", "Starting Remote Control...", "Signed in as tyler", "https://claude.ai/"]) {
+    assert.equal(extractSessionURL(line), null, `matched ${JSON.stringify(line)}`);
+  }
 });
 
 // --- The PowerShell scripts ------------------------------------------------
