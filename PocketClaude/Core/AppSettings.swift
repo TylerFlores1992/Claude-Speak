@@ -238,7 +238,7 @@ final class AppSettings: ObservableObject {
     /// server, so `repositorySlug` is irrelevant in this mode.
     var isRelayConfigured: Bool {
         let trimmed = relayURLString.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, let url = URL(string: trimmed), url.scheme != nil else {
+        guard !trimmed.isEmpty, RelayAddress.isUsable(trimmed) else {
             return false
         }
         return KeychainStore.has(.relayToken)

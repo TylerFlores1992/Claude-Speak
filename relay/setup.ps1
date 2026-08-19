@@ -159,8 +159,10 @@ Step "Start automatically"
 if (Get-ScheduledTask -TaskName "PocketClaude relay" -ErrorAction SilentlyContinue) {
     Ok "startup task already registered"
 } elseif ($admin) {
-    $action  = New-ScheduledTaskAction -Execute (Get-Command node).Source `
-                                       -Argument "$relayRoot\relay\server.mjs"
+    # Through run.ps1, not node directly: the supervisor is what restarts the
+    # relay after it updates itself.
+    $action  = New-ScheduledTaskAction -Execute "powershell.exe" `
+                                       -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$relayRoot\relay\run.ps1`""
     $trigger = New-ScheduledTaskTrigger -AtLogOn
     Register-ScheduledTask -TaskName "PocketClaude relay" -Action $action -Trigger $trigger | Out-Null
     Ok "registered — it will start when you log in"
@@ -173,8 +175,8 @@ Step "Desktop shortcut"
 $shortcut = "$([Environment]::GetFolderPath('Desktop'))\Start PocketClaude relay.lnk"
 $shell = New-Object -ComObject WScript.Shell
 $link = $shell.CreateShortcut($shortcut)
-$link.TargetPath = (Get-Command node).Source
-$link.Arguments = "`"$relayRoot\relay\server.mjs`""
+$link.TargetPath = "powershell.exe"
+$link.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$relayRoot\relay\run.ps1`""
 $link.WorkingDirectory = $repo
 $link.Description = "Runs the PocketClaude relay"
 $link.Save()
@@ -201,6 +203,9 @@ Write-Host ""
 Write-Host "    Relay address   http://$(if ($ip) { $ip } else { '<this-machine>' }):$port" -ForegroundColor Yellow
 Write-Host "    Relay token     $token" -ForegroundColor Yellow
 Write-Host ""
+Write-Host "  Or skip the typing: the relay prints a pocketclaude:// link when it" -ForegroundColor Gray
+Write-Host "  starts. Send that line to yourself and tap it." -ForegroundColor Gray
+Write-Host ""
 Write-Host "  Leave this window open. Ctrl+C stops the relay." -ForegroundColor Gray
 Write-Host ""
 
@@ -208,4 +213,4 @@ $env:RELAY_TOKEN = $token
 $env:RELAY_REPO  = $repo
 $env:RELAY_PORT  = $port
 $env:RELAY_MODEL = "sonnet"
-& node "$relayRoot\relay\server.mjs"
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$relayRoot\relay\run.ps1"

@@ -10,13 +10,13 @@
 // Node 18+, zero dependencies. Start it with:
 //     RELAY_TOKEN=... RELAY_REPO=~/code/camphawk node relay/server.mjs
 //
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { timingSafeEqual } from "node:crypto";
 import { existsSync, readdirSync, realpathSync, openSync, readSync, closeSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { mkdirSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const PORT = Number(process.env.RELAY_PORT ?? 8787);
@@ -41,6 +41,10 @@ const EXTRA_PROJECTS = process.env.RELAY_PROJECTS ?? "";
 // A directory with no code in it, for thinking out loud rather than asking
 // about a repository. `claude -p` runs anywhere; it only reads code if there
 // is code to read, so an empty directory is all a general conversation needs.
+// The relay's own checkout — one level up from this file — so `git pull`
+// updates the relay rather than whatever repository it happens to be answering
+// questions about.
+const RELAY_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const SCRATCH = process.env.RELAY_SCRATCH ?? join(homedir(), "pocketclaude-chat");
 
 /// True only when this file is the program being run, so `import` from the test
@@ -85,6 +89,57 @@ function resolveProject(name) {
     }
   }
   return existsSync(match.path) ? match.path : null;
+}
+
+/** Short commit of the relay checkout, or null outside a git working tree. */
+function version() {
+  try {
+    return execFileSync("git", ["rev-parse", "--short", "HEAD"], {
+      cwd: RELAY_ROOT,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * `git pull` in the relay's own checkout, then exit so the supervisor starts
+ * the new code.
+ *
+ * Exit code 42 is the signal: relay/run.ps1 restarts on 42 and stops on
+ * anything else, so a crash still stops rather than looping forever. Pulling
+ * without restarting would leave the old code running and the new code on
+ * disk, which is the confusing half-state this exists to avoid.
+ */
+function selfUpdate() {
+  const before = version();
+  const output = execFileSync("git", ["pull", "--ff-only"], {
+    cwd: RELAY_ROOT,
+    encoding: "utf8",
+  }).trim();
+  const after = version();
+  return { output, before, after, changed: before !== after };
+}
+
+/** This machine's Tailscale address, so the printed link works from anywhere. */
+function tailscaleAddress() {
+  for (const candidate of [
+    "tailscale",
+    "C:\\Program Files\\Tailscale\\tailscale.exe",
+    "/usr/bin/tailscale",
+    "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+  ]) {
+    try {
+      const out = execFileSync(candidate, ["ip", "-4"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+      const ip = out.trim().split("\n")[0]?.trim();
+      if (ip) return ip;
+    } catch {
+      // Not installed at this path, or not connected — try the next one.
+    }
+  }
+  return null;
 }
 
 function isEntryPoint() {
@@ -421,13 +476,32 @@ function firstLine(text) {
 const server = createServer((req, res) => {
   if (req.method === "GET" && req.url === "/health") {
     res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify({ ok: true, repo: REPO }));
+    res.end(JSON.stringify({ ok: true, repo: REPO, version: version() }));
     return;
   }
 
   if (!authorized(req)) {
     res.writeHead(401, { "content-type": "application/json" });
     res.end(JSON.stringify({ error: "unauthorized" }));
+    return;
+  }
+
+  if (req.method === "POST" && req.url === "/update") {
+    let result;
+    try {
+      result = selfUpdate();
+    } catch (error) {
+      res.writeHead(500, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: error.message.split("\n").slice(-3).join(" ") }));
+      return;
+    }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify(result));
+    if (result.changed) {
+      // After the response is flushed, so the phone hears the outcome before
+      // the process goes away.
+      res.on("finish", () => setTimeout(() => process.exit(42), 250));
+    }
     return;
   }
 
@@ -485,6 +559,16 @@ if (isEntryPoint()) {
     console.log(`  repo:        ${REPO}`);
     console.log(`  permissions: ${PERMISSION_MODE}${ALLOWED_TOOLS ? ` + ${ALLOWED_TOOLS}` : ""}`);
     console.log(`  model:       ${MODEL || "(Claude Code default)"}`);
+    console.log(`  version:     ${version() ?? "(not a git checkout)"}`);
+
+    // Pairing link. Typing a 64-character token into a phone is the worst part
+    // of setting this up, and it is what makes a short guessable token
+    // tempting. Send this line to yourself and tap it.
+    const address = tailscaleAddress() ?? HOST;
+    console.log("");
+    console.log("  Pair the phone by sending yourself this line and tapping it:");
+    console.log(`    pocketclaude://pair?url=${encodeURIComponent(`http://${address}:${PORT}`)}&token=${encodeURIComponent(TOKEN)}`);
+    console.log("");
   });
 }
 

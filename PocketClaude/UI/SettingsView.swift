@@ -11,6 +11,8 @@ struct SettingsView: View {
     @State private var githubToken = ""
     @State private var elevenLabsKey = ""
     @State private var relayToken = ""
+    @State private var relayUpdateMessage: String?
+    @State private var isUpdatingRelay = false
     @State private var savedNotice: String?
 
     var body: some View {
@@ -75,8 +77,8 @@ struct SettingsView: View {
     private var relayAddressProblem: String? {
         let trimmed = settings.relayURLString.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { return "No address set" }
-        guard let url = URL(string: trimmed), url.scheme != nil else {
-            return "Needs a scheme, e.g. http://100.x.y.z:8788"
+        guard RelayAddress.isUsable(trimmed) else {
+            return "Needs http:// or https://, e.g. http://100.x.y.z:8788"
         }
         return nil
     }
@@ -104,10 +106,48 @@ struct SettingsView: View {
                 text: $relayToken,
                 key: .relayToken
             )
+
+            Button {
+                Task { await updateRelay() }
+            } label: {
+                HStack {
+                    Label("Update and restart relay", systemImage: "arrow.down.circle")
+                    Spacer()
+                    if isUpdatingRelay { ProgressView().controlSize(.small) }
+                }
+            }
+            .disabled(isUpdatingRelay || !settings.isRelayConfigured)
+
+            if let relayUpdateMessage {
+                Text(relayUpdateMessage)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         } header: {
             Text("Relay")
         } footer: {
             Text("Set these to the address and RELAY_TOKEN of `relay/server.mjs` on your machine. A Tailscale hostname keeps the relay off the public internet. The repository, model, and tool permissions are configured on the server, not here — see relay/README.md.")
+        }
+    }
+
+    /// Pulls new relay code and restarts it.
+    ///
+    /// Only does anything when the relay runs under `relay/run.ps1` — the
+    /// server can fetch new code but cannot start running it on its own, and
+    /// the supervisor is what turns the exit into a restart.
+    private func updateRelay() async {
+        guard let client = RelayClient.make(settings: settings) else {
+            relayUpdateMessage = "Set the relay address and token first."
+            return
+        }
+        isUpdatingRelay = true
+        defer { isUpdatingRelay = false }
+        do {
+            let result = try await client.update()
+            relayUpdateMessage = result.message
+        } catch {
+            relayUpdateMessage = (error as? LocalizedError)?.errorDescription
+                ?? error.localizedDescription
         }
     }
 

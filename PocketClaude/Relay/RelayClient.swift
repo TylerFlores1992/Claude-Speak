@@ -88,8 +88,8 @@ struct RelayClient {
     static func make(settings: AppSettings, session: URLSession? = nil) -> RelayClient? {
         let raw = settings.relayURLString.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !raw.isEmpty,
+              RelayAddress.isUsable(raw),
               let url = URL(string: raw),
-              url.scheme != nil,
               let token = KeychainStore.get(.relayToken),
               !token.isEmpty
         else { return nil }
