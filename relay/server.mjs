@@ -102,6 +102,26 @@ function resolveProject(name) {
   return existsSync(match.path) ? match.path : null;
 }
 
+/**
+ * The directory a known local session was recorded in.
+ *
+ * Resuming needs this because the dashboard lists every session on the machine,
+ * including ones in repositories that are not in the allowlist - and refusing
+ * to open something you just listed is not a policy, it is a bug. Asking for a
+ * session in Claude-Speak failed with "unknown project: Claude-Speak" for
+ * exactly that reason.
+ *
+ * This is not a hole in the allowlist. The path is not supplied by the phone;
+ * it comes from the session's own recorded cwd, found by matching an id against
+ * sessions already on disk. An id that matches nothing resolves to nothing.
+ */
+function resolveSessionCwd(sessionId) {
+  if (!sessionId) return null;
+  const match = listSessions({ limit: 500 }).find((s) => s.id === sessionId);
+  if (!match?.projectPath) return null;
+  return existsSync(match.projectPath) ? match.projectPath : null;
+}
+
 /** Short commit of the relay checkout, or null outside a git working tree. */
 function version() {
   try {
@@ -286,9 +306,15 @@ async function handleAsk(req, res) {
     return;
   }
 
+  // Resuming runs where the session already lives. An explicit project still
+  // wins, so moving a session somewhere is possible, but the ordinary case -
+  // tap a session in the list, ask it something - no longer depends on that
+  // session's repository being one the allowlist happens to name.
+  const resumedIn = sessionId && !project ? resolveSessionCwd(sessionId) : null;
+
   // Rejected before the stream opens, so a bad project name is an ordinary
   // HTTP error rather than an error frame the phone has to unpick.
-  const workingDirectory = resolveProject(project);
+  const workingDirectory = resumedIn ?? resolveProject(project);
   if (!workingDirectory) {
     res.writeHead(400, { "content-type": "application/json" });
     res.end(JSON.stringify({ error: `unknown project: ${project}` }));
@@ -417,6 +443,10 @@ function listSessions({ limit = 60 } = {}) {
       }
       const head = readHead(path);
       const cwd = head.cwd ?? "";
+      // Sessions the titler created before it learned not to. They are real
+      // files with real ids, so they cannot be un-created from here, but they
+      // are noise in every list and nobody wants to resume one.
+      if (head.firstMessage && head.firstMessage.startsWith(TITLE_PROMPT_PREFIX)) continue;
       found.push({
         id: entry.replace(/\.jsonl$/, ""),
         // From the `cwd` the session itself records. Deriving it from the
@@ -577,6 +607,14 @@ function teleportArgs(sessionId) {
 
 const TITLES_PATH = join(homedir(), ".pocketclaude", "titles.json");
 
+// Shared by the prompt and by the filter that hides sessions the titler created
+// before it stopped creating them. Keeping one constant means the two cannot
+// drift apart and start missing each other.
+const TITLE_PROMPT_PREFIX =
+  "Give a title of at most five words for a coding session that began with " +
+  "the message below. Reply with the title alone: no quotes, no punctuation " +
+  "at the end, no explanation.\n\n";
+
 function loadTitles() {
   try {
     const parsed = JSON.parse(readFileSync(TITLES_PATH, "utf8"));
@@ -630,14 +668,16 @@ function cleanTitle(raw) {
 
 /** Asks a small model for a few words. Returns null on any failure. */
 function nameSession(text) {
-  const prompt =
-    "Give a title of at most five words for a coding session that began with " +
-    "the message below. Reply with the title alone: no quotes, no punctuation " +
-    "at the end, no explanation.\n\n" +
-    text.slice(0, 500);
+  const prompt = TITLE_PROMPT_PREFIX + text.slice(0, 500);
 
   try {
-    const out = execFileSync(CLAUDE_BIN, ["-p", prompt, "--model", "haiku"], {
+    // --no-session-persistence, or naming a session creates a session. Every
+    // title written one more row into the dashboard, whose first message was
+    // the titling prompt itself - visible in the app as "Continuing 'Give a
+    // title of at most five words...'". The titler was polluting the list it
+    // exists to tidy.
+    const args = ["-p", prompt, "--model", "haiku", "--no-session-persistence"];
+    const out = execFileSync(CLAUDE_BIN, args, {
       encoding: "utf8",
       timeout: 30_000,
       // Inherit nothing on stdin: without this the CLI can wait on a tty that
@@ -896,6 +936,7 @@ export {
   projects,
   resolveProject,
   cleanTitle,
+  resolveSessionCwd,
   parseCloudSessionId,
   cloudSendArgs,
   teleportArgs,

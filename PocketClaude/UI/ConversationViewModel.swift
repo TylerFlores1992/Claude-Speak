@@ -439,6 +439,19 @@ final class ConversationViewModel: ObservableObject {
     /// configured repository.
     @Published var activeProject: String = ""
 
+    /// The workspace name to send with a question, or "" to let the relay
+    /// decide.
+    ///
+    /// Empty while resuming, deliberately. A resumed session runs where it
+    /// already lives, and naming its repository only worked when that
+    /// repository happened to be one the relay's allowlist covers — so tapping
+    /// a session from any other checkout failed with "unknown project", after
+    /// the app had just listed it. The name is still shown on the chip; it is
+    /// only not sent.
+    private var projectToSend: String {
+        session.relaySessionID == nil ? activeProject : ""
+    }
+
     /// Sessions and workspaces from the relay, for the dashboard.
     func relayCatalog() async throws -> ([RelaySession], [RelayProject]) {
         guard let client = RelayClient.make(settings: settings) else {
@@ -555,7 +568,7 @@ final class ConversationViewModel: ObservableObject {
             let result = try await client.ask(
                 text: text,
                 sessionID: session.relaySessionID,
-                project: activeProject
+                project: projectToSend
             ) { [weak self] event in
                 self?.handleRelay(event, streaming: streaming)
             }
