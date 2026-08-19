@@ -20,6 +20,11 @@ struct DashboardView: View {
     @State private var isLoading = false
     @State private var loadError: String?
     @State private var isChoosingProject = false
+    @State private var isBringingCloudSession = false
+    @State private var cloudSessionLink = ""
+    @State private var teleportProject = ""
+    @State private var teleportProblem: String?
+    @State private var isTeleporting = false
 
     private var grouped: [(project: String, sessions: [RelaySession])] {
         let matching = sessions.filter { session in
@@ -51,6 +56,98 @@ struct DashboardView: View {
                 }
             }
             Button("Cancel", role: .cancel) {}
+        }
+        .sheet(isPresented: $isBringingCloudSession) { cloudSessionSheet }
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button { isBringingCloudSession = true } label: {
+                    Image(systemName: "cloud.fill")
+                }
+                .accessibilityLabel("Bring a cloud session here")
+            }
+        }
+    }
+
+    /// Pulls a session from the Claude app onto the relay machine.
+    ///
+    /// Those sessions run on Anthropic's infrastructure, so nothing on the
+    /// relay can see them and there is no API that lists them. `--teleport` is
+    /// the supported way across, and once it has run the session is an
+    /// ordinary local one that this list already shows.
+    private var cloudSessionSheet: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("claude.ai/code/session_…", text: $cloudSessionLink, axis: .vertical)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                        .lineLimit(1...3)
+                } header: {
+                    Text("Session link")
+                } footer: {
+                    Text("Open the session in the Claude app, copy its link, and paste it here.")
+                }
+
+                Section {
+                    Picker("Repository", selection: $teleportProject) {
+                        Text("Relay default").tag("")
+                        ForEach(projects.filter { $0.available && !$0.isScratch }) { project in
+                            Text(project.name).tag(project.name)
+                        }
+                    }
+                } footer: {
+                    Text("Teleport checks out the session's branch, so it has to run in a checkout of the same repository, with nothing uncommitted.")
+                }
+
+                if let teleportProblem {
+                    Section {
+                        Label(teleportProblem, systemImage: "exclamationmark.triangle.fill")
+                            .font(.footnote)
+                            .foregroundStyle(.orange)
+                    }
+                }
+
+                Section {
+                    Button {
+                        Task { await bringCloudSession() }
+                    } label: {
+                        HStack {
+                            Text("Bring it here")
+                            Spacer()
+                            if isTeleporting { ProgressView().controlSize(.small) }
+                        }
+                    }
+                    .disabled(isTeleporting || cloudSessionLink.trimmingCharacters(in: .whitespaces).isEmpty)
+                } footer: {
+                    Text("The conversation and its branch come across. The cloud environment — its variables, setup script, and network rules — does not; work continues in the relay machine's own environment.")
+                }
+            }
+            .navigationTitle("Cloud session")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { isBringingCloudSession = false }
+                }
+            }
+        }
+    }
+
+    private func bringCloudSession() async {
+        teleportProblem = nil
+        isTeleporting = true
+        defer { isTeleporting = false }
+        do {
+            try await viewModel.teleport(
+                link: cloudSessionLink.trimmingCharacters(in: .whitespacesAndNewlines),
+                project: teleportProject
+            )
+            cloudSessionLink = ""
+            isBringingCloudSession = false
+            // It is a local session now, so the ordinary list is where it shows.
+            await load()
+        } catch {
+            teleportProblem = (error as? LocalizedError)?.errorDescription
+                ?? error.localizedDescription
         }
     }
 

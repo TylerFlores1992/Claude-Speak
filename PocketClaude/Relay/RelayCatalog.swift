@@ -110,6 +110,70 @@ extension RelayClient {
         )
     }
 
+    /// Pulls a session from Anthropic's cloud onto the relay machine.
+    ///
+    /// After this succeeds the session is an ordinary local one: it appears in
+    /// `sessions()` and `ask` can resume it like any other. Nothing about it is
+    /// special afterwards, which is why this is the route worth having rather
+    /// than a parallel cloud-session mode through the whole app.
+    ///
+    /// What comes across is the conversation and the branch. The cloud
+    /// environment - its variables, its setup script, its network rules - does
+    /// not; work continues in the relay machine's own environment.
+    func teleport(sessionID: String, project: String = "") async throws {
+        var body: [String: JSONValue] = ["sessionId": .string(sessionID)]
+        if !project.isEmpty { body["project"] = .string(project) }
+        _ = try await post(path: "teleport", body: body, timeout: 200)
+    }
+
+    /// Queues a message into a cloud session.
+    ///
+    /// Returns without an answer, because the CLI returns without one: this
+    /// posts the message and exits. Read the reply in the Claude app, or
+    /// teleport the session first if you want it answered here.
+    func sendToCloud(sessionID: String, text: String) async throws -> URL? {
+        let json = try await post(
+            path: "cloud/send",
+            body: ["sessionId": .string(sessionID), "text": .string(text)],
+            timeout: 70
+        )
+        return (json["url"]?.stringValue).flatMap(URL.init(string:))
+    }
+
+    /// Shared plumbing for the endpoints that post JSON and read JSON back.
+    private func post(
+        path: String,
+        body: [String: JSONValue],
+        timeout: TimeInterval
+    ) async throws -> JSONValue {
+        guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
+            throw RelayError.invalidURL(baseURL.absoluteString)
+        }
+        components.path = components.path.hasSuffix("/")
+            ? components.path + path
+            : components.path + "/" + path
+        guard let url = components.url else { throw RelayError.invalidURL(baseURL.absoluteString) }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = timeout
+        request.httpBody = try JSONEncoder().encode(JSONValue.object(body))
+
+        let (data, response) = try await session.data(for: request)
+        let json = (try? JSONDecoder().decode(JSONValue.self, from: data)) ?? .object([:])
+        if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+            throw RelayError.relay(
+                json["error"]?.stringValue ?? "The relay refused that (HTTP \(http.statusCode))."
+            )
+        }
+        if let problem = json["error"]?.stringValue, !problem.isEmpty {
+            throw RelayError.relay(problem)
+        }
+        return json
+    }
+
     /// Shared plumbing for the two read-only endpoints.
     private func getJSON(path: String) async throws -> JSONValue {
         guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {

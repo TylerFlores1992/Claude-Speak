@@ -495,6 +495,75 @@ function readHead(path, maxBytes = 64 * 1024) {
   }
 }
 
+/** JSON response in one line, since the cloud endpoints send several. */
+function respond(res, status, payload) {
+  res.writeHead(status, { "content-type": "application/json" });
+  res.end(JSON.stringify(payload));
+}
+
+/** Reads and parses a JSON request body. */
+async function readJSON(req) {
+  const raw = await readBody(req);
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    throw new Error(`bad request: ${error.message}`);
+  }
+}
+
+// --- Cloud sessions --------------------------------------------------------
+//
+// The sessions in the Claude app's Code tab run on Anthropic's infrastructure,
+// not this machine, so they are not in ~/.claude/projects and nothing here can
+// read them. There is no public API to list them either.
+//
+// There are two supported ways to reach one, both through the CLI:
+//
+//   claude -p "<text>" --cloud <id>   queues a message into the cloud session
+//                                     and exits. It does not wait for a reply.
+//   claude --teleport <id>            pulls the session's branch and full
+//                                     conversation history onto this machine,
+//                                     where it becomes an ordinary local
+//                                     session that /sessions already lists and
+//                                     /ask can already resume.
+//
+// Teleport is the one that gives a phone the whole loop, because after it runs
+// there is nothing special about the session any more.
+
+/**
+ * Extracts a cloud session id from a bare id or a claude.ai/code URL.
+ *
+ * This value arrives from the phone and becomes a command-line argument, so it
+ * is validated rather than trusted: without the character check, an "id" of
+ * "--dangerously-skip-permissions" would be passed straight to the CLI as a
+ * flag. Returns null for anything that is not plainly an id.
+ */
+function parseCloudSessionId(input) {
+  if (typeof input !== "string") return null;
+  let text = input.trim();
+  if (!text) return null;
+
+  // Accept the URL people actually copy out of the address bar.
+  const match = text.match(/claude\.ai\/code\/([^/?#\s]+)/i);
+  if (match) text = match[1];
+
+  // Ids look like session_01... or cse_.... Anything with a slash, a space, or
+  // a leading dash is not one.
+  if (!/^[A-Za-z0-9_-]{8,128}$/.test(text)) return null;
+  if (text.startsWith("-")) return null;
+  return text;
+}
+
+/** Arguments for queueing a message into a cloud session. */
+function cloudSendArgs(sessionId, text) {
+  return ["-p", text, "--cloud", sessionId, "--output-format", "json"];
+}
+
+/** Arguments for pulling a cloud session onto this machine. */
+function teleportArgs(sessionId) {
+  return ["--teleport", sessionId];
+}
+
 // --- Session titles --------------------------------------------------------
 //
 // A session's title is otherwise its first question verbatim, which is how a
@@ -655,6 +724,81 @@ const server = createServer((req, res) => {
     return;
   }
 
+  if (req.method === "POST" && req.url === "/cloud/send") {
+    readJSON(req)
+      .then((body) => {
+        const sessionId = parseCloudSessionId(body.sessionId);
+        const text = typeof body.text === "string" ? body.text.trim() : "";
+        if (!sessionId) return respond(res, 400, { error: "That doesn't look like a cloud session id." });
+        if (!text) return respond(res, 400, { error: "Nothing to send." });
+
+        let output;
+        try {
+          output = execFileSync(CLAUDE_BIN, cloudSendArgs(sessionId, text), {
+            encoding: "utf8",
+            timeout: 60_000,
+            stdio: ["ignore", "pipe", "pipe"],
+          });
+        } catch (error) {
+          return respond(res, 502, {
+            error: (error.stderr || error.message || "").split("\n").slice(-3).join(" ").trim(),
+          });
+        }
+        const parsed = (() => {
+          try {
+            return JSON.parse(output);
+          } catch {
+            return null;
+          }
+        })();
+        // Queue-and-exit: the CLI confirms delivery, not an answer. Saying so
+        // here keeps the phone from waiting for a reply that never comes.
+        respond(res, 200, {
+          queued: parsed?.ok !== false,
+          sessionId: parsed?.session_id ?? sessionId,
+          url: parsed?.url ?? null,
+          error: parsed?.error ?? null,
+        });
+      })
+      .catch((error) => respond(res, 400, { error: error.message }));
+    return;
+  }
+
+  if (req.method === "POST" && req.url === "/teleport") {
+    readJSON(req)
+      .then((body) => {
+        const sessionId = parseCloudSessionId(body.sessionId);
+        if (!sessionId) return respond(res, 400, { error: "That doesn't look like a cloud session id." });
+
+        const cwd = resolveProject(typeof body.project === "string" ? body.project : "");
+        if (!cwd) return respond(res, 400, { error: "Unknown workspace." });
+
+        try {
+          const output = execFileSync(CLAUDE_BIN, teleportArgs(sessionId), {
+            cwd,
+            encoding: "utf8",
+            timeout: 180_000,
+            // No stdin: teleport prompts to stash uncommitted changes, and a
+            // prompt nobody can answer would hang until the timeout. Closing
+            // stdin makes it fail fast instead, and the message says why.
+            stdio: ["ignore", "pipe", "pipe"],
+          });
+          respond(res, 200, { ok: true, sessionId, output: output.slice(-2000) });
+        } catch (error) {
+          respond(res, 502, {
+            error: (error.stderr || error.stdout || error.message || "")
+              .split("\n")
+              .filter(Boolean)
+              .slice(-4)
+              .join(" ")
+              .trim(),
+          });
+        }
+      })
+      .catch((error) => respond(res, 400, { error: error.message }));
+    return;
+  }
+
   if (req.method === "GET" && req.url === "/projects") {
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({
@@ -734,4 +878,15 @@ if (isEntryPoint()) {
 }
 
 // Exported for the test script; importing this file starts nothing.
-export { interpret, buildArgs, readHead, listSessions, projects, resolveProject, cleanTitle };
+export {
+  interpret,
+  buildArgs,
+  readHead,
+  listSessions,
+  projects,
+  resolveProject,
+  cleanTitle,
+  parseCloudSessionId,
+  cloudSendArgs,
+  teleportArgs,
+};
