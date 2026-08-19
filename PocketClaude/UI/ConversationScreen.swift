@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The conversation: transcript on top, big talk button on the bottom.
+/// The conversation: transcript on top, one composer card at the bottom.
 ///
 /// Pushed from the dashboard rather than being the root, so the navigation
 /// stack belongs to `RootView` and this supplies only its own toolbar.
@@ -10,7 +10,6 @@ struct ConversationScreen: View {
     @Environment(\.scenePhase) private var scenePhase
 
     @State private var typedInput = ""
-    @State private var isShowingTypedInput = false
     @State private var isShowingSessions = false
 
     var body: some View {
@@ -27,44 +26,16 @@ struct ConversationScreen: View {
                     confirmationBar(prompt: prompt)
                 }
 
-                if isShowingTypedInput { typedInputBar }
-                composerChips
-
-                TalkButton(
-                    isListening: viewModel.state == .listening,
-                    // Still tappable while a confirmation is pending, so you can
-                    // answer "confirm" or "cancel" by voice.
-                    isEnabled: !viewModel.state.isBusy || isAwaitingConfirmation,
-                    onPress: viewModel.beginListening,
-                    onRelease: viewModel.endListening
-                )
-                .padding(.vertical, 20)
+                composer
             }
             .navigationTitle(viewModel.activeProject.isEmpty ? "PocketClaude" : viewModel.activeProject)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItemGroup(placement: .topBarLeading) {
+                ToolbarItem(placement: .topBarTrailing) {
                     Button { viewModel.newSession() } label: {
                         Image(systemName: "square.and.pencil")
                     }
                     .accessibilityLabel("New session")
-
-                    Button { isShowingSessions = true } label: {
-                        Image(systemName: "clock.arrow.circlepath")
-                    }
-                    .accessibilityLabel("Past conversations")
-                }
-                ToolbarItemGroup(placement: .topBarTrailing) {
-                    Button { isShowingTypedInput.toggle() } label: {
-                        Image(systemName: "keyboard")
-                    }
-                    .accessibilityLabel("Type instead")
-
-                    Button { viewModel.repeatLastAnswer() } label: {
-                        Image(systemName: "arrow.counterclockwise.circle")
-                    }
-                    .accessibilityLabel("Repeat last answer")
-
                 }
             }
             .sheet(isPresented: $isShowingSessions) {
@@ -186,61 +157,132 @@ struct ConversationScreen: View {
         .background(Color.orange.opacity(0.12))
     }
 
-    // MARK: - Typed fallback
+    // MARK: - Composer
 
+    /// One rounded card holding everything you act with: what you want to say,
+    /// what will answer, and the button that sends it.
+    ///
+    /// Previously these were three stacked strips — a typing bar you had to
+    /// reveal from the toolbar, a row of chips, and a 168pt button below them.
+    /// Collapsing them costs nothing functionally and gives the transcript back
+    /// most of the lower third of the screen, which is the part you actually
+    /// read.
+    private var composer: some View {
+        VStack(spacing: 12) {
+            TextField(composerPrompt, text: $typedInput, axis: .vertical)
+                .textFieldStyle(.plain)
+                .lineLimit(1...5)
+                .font(.body)
+                .submitLabel(.send)
+                .onSubmit(sendTyped)
 
-    /// Model and effort, where you can reach them mid-conversation rather than
-    /// buried in Settings. Only meaningful on the relay, which passes --model
-    /// to the CLI; the direct API path reads the same settings.
-    private var composerChips: some View {
-        HStack(spacing: 8) {
-            ChipMenu(title: settings.model.displayName) {
-                Picker("Model", selection: $settings.model) {
-                    ForEach(AppSettings.Model.allCases) { model in
-                        Text(model.displayName).tag(model)
+            HStack(spacing: 8) {
+                actionsMenu
+
+                ChipMenu(title: modelChipTitle, systemImage: "sparkle") {
+                    Picker("Model", selection: $settings.model) {
+                        ForEach(AppSettings.Model.allCases) { model in
+                            Text(model.displayName).tag(model)
+                        }
+                    }
+                    Picker("Effort", selection: $settings.effort) {
+                        ForEach(AppSettings.Effort.allCases) { effort in
+                            Text(effort.displayName).tag(effort)
+                        }
                     }
                 }
-            }
 
-            ChipMenu(title: settings.effort.displayName, systemImage: "bolt.fill") {
-                Picker("Effort", selection: $settings.effort) {
-                    ForEach(AppSettings.Effort.allCases) { effort in
-                        Text(effort.displayName).tag(effort)
+                Spacer(minLength: 0)
+
+                // The send arrow replaces the microphone only while there is
+                // something typed. Two always-visible buttons that both mean
+                // "send" is the confusing arrangement worth avoiding, and the
+                // hold-to-talk button is the one that has to be reachable
+                // without looking.
+                if hasTypedText {
+                    Button(action: sendTyped) {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.system(size: 34))
+                            .symbolRenderingMode(.hierarchical)
                     }
+                    .disabled(viewModel.state.isBusy)
+                    .accessibilityLabel("Send")
+                } else {
+                    TalkButton(
+                        isListening: viewModel.state == .listening,
+                        // Still usable while a confirmation is pending, so you
+                        // can answer "confirm" or "cancel" by voice.
+                        isEnabled: !viewModel.state.isBusy || isAwaitingConfirmation,
+                        size: .compact,
+                        onPress: viewModel.beginListening,
+                        onRelease: viewModel.endListening
+                    )
                 }
             }
-
-            if !viewModel.activeProject.isEmpty {
-                Text(viewModel.activeProject)
-                    .font(.caption.weight(.medium))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(Color.pcIconWell, in: Capsule())
-                    .lineLimit(1)
-            }
-
-            Spacer(minLength: 0)
         }
-        .padding(.horizontal, 16)
-        .padding(.bottom, 4)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .background(
+            RoundedRectangle(cornerRadius: 26, style: .continuous)
+                .fill(Color.pcCard)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 26, style: .continuous)
+                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+        )
+        .padding(.horizontal, 12)
+        .padding(.bottom, 8)
     }
 
-    private var typedInputBar: some View {
-        HStack {
-            TextField("Type a message", text: $typedInput, axis: .vertical)
-                .textFieldStyle(.roundedBorder)
-                .lineLimit(1...4)
-                .submitLabel(.send)
+    /// Names the workspace, so it is clear which checkout a question lands in
+    /// without spending a chip on it.
+    private var composerPrompt: String {
+        viewModel.activeProject.isEmpty
+            ? "Ask Claude"
+            : "Ask about \(viewModel.activeProject)"
+    }
 
-            Button {
-                viewModel.sendTyped(typedInput)
-                typedInput = ""
-            } label: {
-                Image(systemName: "arrow.up.circle.fill").font(.title2)
+    /// "Opus 5 High" — model and effort together, the way Claude shows them.
+    /// Effort only applies to models that support it, so naming it beside a
+    /// model that ignores it would be a lie about what the next turn will do.
+    private var modelChipTitle: String {
+        settings.model.supportsAdaptiveThinking
+            ? "\(settings.model.shortName) \(settings.effort.displayName)"
+            : settings.model.shortName
+    }
+
+    private var hasTypedText: Bool {
+        !typedInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func sendTyped() {
+        let text = typedInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        viewModel.sendTyped(text)
+        typedInput = ""
+    }
+
+    /// The things you reach for occasionally. In a menu rather than the toolbar
+    /// because the toolbar was carrying five icons, none of them labelled.
+    private var actionsMenu: some View {
+        Menu {
+            Button { isShowingSessions = true } label: {
+                Label("Past conversations", systemImage: "clock.arrow.circlepath")
             }
-            .disabled(typedInput.trimmingCharacters(in: .whitespaces).isEmpty)
+            Button { viewModel.repeatLastAnswer() } label: {
+                Label("Repeat last answer", systemImage: "arrow.counterclockwise")
+            }
+            Divider()
+            Button { viewModel.newSession() } label: {
+                Label("New session", systemImage: "square.and.pencil")
+            }
+        } label: {
+            Image(systemName: "plus")
+                .font(.system(size: 17, weight: .medium))
+                .frame(width: 34, height: 34)
+                .background(Color.pcIconWell, in: Circle())
+                .foregroundStyle(.primary)
         }
-        .padding(.horizontal)
-        .padding(.bottom, 4)
+        .accessibilityLabel("More actions")
     }
 }

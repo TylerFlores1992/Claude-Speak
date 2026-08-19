@@ -1,14 +1,26 @@
 import SwiftUI
 
-/// The one control that matters: press and hold to talk, release to send.
+/// Press and hold to record, release to send.
 ///
-/// Deliberately enormous and centred low on the screen so it can be found by
-/// thumb without looking. `DragGesture(minimumDistance: 0)` is the SwiftUI idiom
-/// for press-and-hold — `onTapGesture` only fires after release, and
-/// `LongPressGesture` has a built-in delay we don't want.
+/// Hold rather than tap-to-start/tap-to-stop: with the phone pocketed you know
+/// you are still recording because your thumb is still down, and letting go is
+/// a thing you cannot forget to do.
+///
+/// Two sizes. `.large` is the standalone button; `.compact` sits inside the
+/// composer next to the model chips, where the label has no room and the
+/// surrounding bar supplies the context instead.
 struct TalkButton: View {
+    enum Size {
+        case large, compact
+
+        var diameter: CGFloat { self == .large ? 168 : 52 }
+        var icon: CGFloat { self == .large ? 46 : 22 }
+        var showsLabel: Bool { self == .large }
+    }
+
     var isListening: Bool
     var isEnabled: Bool
+    var size: Size = .large
     var onPress: () -> Void
     var onRelease: () -> Void
 
@@ -18,16 +30,21 @@ struct TalkButton: View {
         ZStack {
             Circle()
                 .fill(fillColor)
-                .frame(width: 168, height: 168)
-                .shadow(color: fillColor.opacity(0.45), radius: isListening ? 28 : 10)
+                .frame(width: size.diameter, height: size.diameter)
+                .shadow(
+                    color: fillColor.opacity(0.45),
+                    radius: isListening ? (size == .large ? 28 : 12) : (size == .large ? 10 : 4)
+                )
                 .scaleEffect(isListening ? 1.06 : 1.0)
                 .animation(.spring(response: 0.3, dampingFraction: 0.6), value: isListening)
 
             VStack(spacing: 8) {
                 Image(systemName: isListening ? "waveform" : "mic.fill")
-                    .font(.system(size: 46, weight: .medium))
-                Text(isListening ? "Listening" : "Hold to talk")
-                    .font(.footnote.weight(.semibold))
+                    .font(.system(size: size.icon, weight: .medium))
+                if size.showsLabel {
+                    Text(isListening ? "Listening" : "Hold to talk")
+                        .font(.footnote.weight(.semibold))
+                }
             }
             .foregroundStyle(.white)
         }

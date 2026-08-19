@@ -25,6 +25,16 @@ final class AppSettings: ObservableObject {
             }
         }
 
+        /// For the composer chip, where "Claude Opus 5 (default)" does not fit
+        /// beside the other controls.
+        var shortName: String {
+            switch self {
+            case .opus5: return "Opus 5"
+            case .sonnet5: return "Sonnet 5"
+            case .haiku45: return "Haiku 4.5"
+            }
+        }
+
         /// Adaptive thinking and the `effort` parameter arrived with Claude 4.6.
         /// Haiku 4.5 predates both and rejects them with a 400.
         var supportsAdaptiveThinking: Bool {
