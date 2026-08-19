@@ -35,6 +35,11 @@ struct DashboardView: View {
     @State private var refreshSummary: String?
     @State private var remoteControl = RelayClient.RemoteControlState(running: false)
     @State private var isTogglingRemoteControl = false
+    /// Set by a delete swipe; the confirmation dialog acts on it. Deleting is
+    /// the one action here that cannot be taken back, so it is the one that
+    /// asks.
+    @State private var sessionPendingDeletion: RelaySession?
+    @State private var rowActionProblem: String?
 
     private var grouped: [(project: String, sessions: [RelaySession])] {
         let matching = sessions.filter { session in
@@ -394,6 +399,23 @@ struct DashboardView: View {
                         }
                         .buttonStyle(.plain)
                         .listRowBackground(Color.pcCard)
+                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                            // Full swipe off, deliberately: iOS runs the first
+                            // action on a full swipe, and "flick left, session
+                            // gone" is the wrong ergonomics next to a delete.
+                            Button(role: .destructive) {
+                                sessionPendingDeletion = session
+                            } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
+
+                            Button {
+                                Task { await archive(session) }
+                            } label: {
+                                Label("Archive", systemImage: "archivebox")
+                            }
+                            .tint(.orange)
+                        }
                     }
                 } header: {
                     Label(
@@ -409,6 +431,60 @@ struct DashboardView: View {
         }
         .listStyle(.insetGrouped)
         .scrollContentBackground(.hidden)
+        .confirmationDialog(
+            "Delete this session?",
+            isPresented: Binding(
+                get: { sessionPendingDeletion != nil },
+                set: { if !$0 { sessionPendingDeletion = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Delete \u{201C}\(sessionPendingDeletion?.title ?? "")\u{201D}", role: .destructive) {
+                if let session = sessionPendingDeletion {
+                    Task { await delete(session) }
+                }
+            }
+            Button("Cancel", role: .cancel) { sessionPendingDeletion = nil }
+        } message: {
+            Text("The transcript is removed from the relay machine. This can't be undone — archive instead if you only want it out of the list.")
+        }
+        .alert(
+            "That didn't work",
+            isPresented: Binding(
+                get: { rowActionProblem != nil },
+                set: { if !$0 { rowActionProblem = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { rowActionProblem = nil }
+        } message: {
+            Text(rowActionProblem ?? "")
+        }
+    }
+
+    private func archive(_ session: RelaySession) async {
+        // Optimistic: the row leaves the list now, and comes back with an
+        // explanation if the relay refuses. Waiting on a round trip to hide a
+        // row makes the swipe feel broken.
+        sessions.removeAll { $0.id == session.id }
+        do {
+            try await viewModel.archiveSession(id: session.id)
+        } catch {
+            rowActionProblem = (error as? LocalizedError)?.errorDescription
+                ?? error.localizedDescription
+            await load()
+        }
+    }
+
+    private func delete(_ session: RelaySession) async {
+        sessionPendingDeletion = nil
+        sessions.removeAll { $0.id == session.id }
+        do {
+            try await viewModel.deleteSession(id: session.id)
+        } catch {
+            rowActionProblem = (error as? LocalizedError)?.errorDescription
+                ?? error.localizedDescription
+            await load()
+        }
     }
 
     private func row(_ session: RelaySession) -> some View {

@@ -21,6 +21,7 @@ import {
   resolveProject,
   cleanTitle,
   resolveSessionCwd,
+  sessionFilePath,
   extractSessionURL,
   parseCloudSessionId,
   cloudSendArgs,
@@ -574,6 +575,31 @@ test("a message that looks like a flag is still a message", () => {
   const args = cloudSendArgs("session_01abcdef2345", "--help");
   assert.equal(args[0], "-p");
   assert.equal(args[1], "--help");
+});
+
+// --- Deleting sessions -----------------------------------------------------
+//
+// The id is phone-supplied and ends up naming a file to unlink, so the
+// resolver is a security boundary: it matches ids against files that already
+// exist under ~/.claude/projects and refuses anything shaped like a path.
+
+test("a traversal attempt never resolves to a file", () => {
+  for (const attempt of [
+    "../../etc/passwd",
+    "..\\..\\secrets",
+    "a/b",
+    "a\\b",
+    "..",
+    "",
+    null,
+    undefined,
+  ]) {
+    assert.equal(sessionFilePath(attempt), null, `resolved ${JSON.stringify(attempt)}`);
+  }
+});
+
+test("an unknown id resolves to nothing rather than a guess", () => {
+  assert.equal(sessionFilePath("00000000-0000-0000-0000-000000000000"), null);
 });
 
 // --- Remote Control --------------------------------------------------------

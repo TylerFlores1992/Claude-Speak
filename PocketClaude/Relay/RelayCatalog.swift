@@ -156,6 +156,25 @@ extension RelayClient {
         }
     }
 
+    /// Hides a session from the list. The transcript stays on the relay
+    /// machine and `claude --resume` still works at a keyboard — it has only
+    /// left this list.
+    func archiveSession(id: String) async throws {
+        let json = try await post(path: "sessions/archive", body: ["id": .string(id)], timeout: 15)
+        if let problem = json["error"]?.stringValue, !problem.isEmpty {
+            throw RelayError.relay(problem)
+        }
+    }
+
+    /// Deletes a session's transcript file. Not undoable, which is why the UI
+    /// confirms first and archive is the swipe that doesn't.
+    func deleteSession(id: String) async throws {
+        let json = try await post(path: "sessions/delete", body: ["id": .string(id)], timeout: 15)
+        if let problem = json["error"]?.stringValue, !problem.isEmpty {
+            throw RelayError.relay(problem)
+        }
+    }
+
     /// Whether the relay is serving a session to claude.ai and the Claude app.
     struct RemoteControlState: Equatable, Sendable {
         var running: Bool

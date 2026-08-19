@@ -13,7 +13,7 @@
 import { execFileSync, spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { timingSafeEqual } from "node:crypto";
-import { existsSync, readdirSync, realpathSync, openSync, readSync, closeSync, statSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, realpathSync, openSync, readSync, closeSync, statSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { mkdirSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
@@ -458,6 +458,7 @@ function listSessions({ limit = 60 } = {}) {
   // Older local copies of a cloud session that has since been re-teleported.
   // Without this every refresh leaves another row behind, all titled the same.
   const superseded = supersededLocalIds();
+  const archived = loadArchived();
   const found = [];
   for (const projectDir of readdirSync(root, { withFileTypes: true })) {
     if (!projectDir.isDirectory()) continue;
@@ -478,6 +479,7 @@ function listSessions({ limit = 60 } = {}) {
       // are noise in every list and nobody wants to resume one.
       if (head.firstMessage && head.firstMessage.startsWith(TITLE_PROMPT_PREFIX)) continue;
       if (superseded.has(entry.replace(/\.jsonl$/, ""))) continue;
+      if (archived.has(entry.replace(/\.jsonl$/, ""))) continue;
       found.push({
         id: entry.replace(/\.jsonl$/, ""),
         // From the `cwd` the session itself records. Deriving it from the
@@ -809,6 +811,56 @@ function teleportArgs(sessionId) {
 
 const TITLES_PATH = join(homedir(), ".pocketclaude", "titles.json");
 
+// Archived sessions.
+//
+// Claude Code has no archive of its own - a session is a transcript file that
+// exists or does not - so archiving is this relay hiding ids from the listing.
+// The transcript stays on disk and `claude --resume <id>` still works from a
+// keyboard; the session has only left the phone's list. Deleting, by contrast,
+// removes the transcript file itself and is not undoable.
+
+const ARCHIVE_PATH = join(homedir(), ".pocketclaude", "archived.json");
+
+function loadArchived() {
+  try {
+    const parsed = JSON.parse(readFileSync(ARCHIVE_PATH, "utf8"));
+    return Array.isArray(parsed) ? new Set(parsed) : new Set();
+  } catch {
+    return new Set();
+  }
+}
+
+function saveArchived(ids) {
+  try {
+    mkdirSync(dirname(ARCHIVE_PATH), { recursive: true });
+    writeFileSync(ARCHIVE_PATH, JSON.stringify([...ids], null, 2));
+  } catch {
+    // Losing this un-hides sessions; it never loses data.
+  }
+}
+
+/**
+ * The transcript file for a session id, or null.
+ *
+ * Resolved by matching the id against files already on disk, never by building
+ * a path from the request - the id is phone-supplied, and "delete the file I
+ * name" is not something to hand a bearer token.
+ */
+function sessionFilePath(sessionId) {
+  if (typeof sessionId !== "string" || !sessionId) return null;
+  // The id has to be a plain filename: ".." or a slash would escape the
+  // projects directory even though the path is assembled here, not received.
+  if (/[\\/]|\.\./.test(sessionId)) return null;
+  const root = join(homedir(), ".claude", "projects");
+  if (!existsSync(root)) return null;
+  for (const projectDir of readdirSync(root, { withFileTypes: true })) {
+    if (!projectDir.isDirectory()) continue;
+    const candidate = join(root, projectDir.name, `${sessionId}.jsonl`);
+    if (existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
 // Shared by the prompt and by the filter that hides sessions the titler created
 // before it stopped creating them. Keeping one constant means the two cannot
 // drift apart and start missing each other.
@@ -1029,6 +1081,51 @@ const server = createServer((req, res) => {
     return;
   }
 
+  if (req.method === "POST" && req.url === "/sessions/archive") {
+    readJSON(req)
+      .then((body) => {
+        // Archiving does not require the file to exist: hiding a row that has
+        // already been cleaned up by Claude Code's 30-day retention is fine.
+        const id = typeof body.id === "string" ? body.id.trim() : "";
+        if (!id || /[\\/]|\.\./.test(id)) {
+          return respond(res, 400, { error: "That doesn't look like a session id." });
+        }
+        const ids = loadArchived();
+        ids.add(id);
+        saveArchived(ids);
+        respond(res, 200, { ok: true, archived: id });
+      })
+      .catch((error) => respond(res, 400, { error: error.message }));
+    return;
+  }
+
+  if (req.method === "POST" && req.url === "/sessions/delete") {
+    readJSON(req)
+      .then((body) => {
+        const id = typeof body.id === "string" ? body.id.trim() : "";
+        const path = sessionFilePath(id);
+        if (!path) {
+          return respond(res, 404, { error: "No session with that id on this machine." });
+        }
+        try {
+          unlinkSync(path);
+        } catch (error) {
+          return respond(res, 500, { error: `Couldn't delete it: ${error.message}` });
+        }
+        // Tidy the caches so the id doesn't linger as a hidden entry.
+        const ids = loadArchived();
+        if (ids.delete(id)) saveArchived(ids);
+        const titles = loadTitles();
+        if (titles[id]) {
+          delete titles[id];
+          saveTitles(titles);
+        }
+        respond(res, 200, { ok: true, deleted: id });
+      })
+      .catch((error) => respond(res, 400, { error: error.message }));
+    return;
+  }
+
   if (req.method === "GET" && req.url === "/remote-control") {
     respond(res, 200, remoteControlStatus());
     return;
@@ -1201,6 +1298,7 @@ export {
   resolveProject,
   cleanTitle,
   resolveSessionCwd,
+  sessionFilePath,
   extractSessionURL,
   parseCloudSessionId,
   cloudSendArgs,
