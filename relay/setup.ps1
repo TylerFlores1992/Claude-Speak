@@ -1,4 +1,4 @@
-# PocketClaude relay — one-shot setup for Windows.
+# PocketClaude relay - one-shot setup for Windows.
 #
 #   irm https://raw.githubusercontent.com/TylerFlores1992/Claude-Speak/main/relay/setup.ps1 | iex
 #
@@ -25,7 +25,7 @@ Step "Node.js"
 if (Have node) {
     Ok "already installed ($(node --version))"
 } else {
-    Warn "installing — this takes a minute"
+    Warn "installing - this takes a minute"
     winget install --silent --accept-package-agreements --accept-source-agreements OpenJS.NodeJS.LTS
     $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" +
                 [Environment]::GetEnvironmentVariable("Path", "User")
@@ -73,14 +73,14 @@ if (Have claude) {
 Step "Claude account"
 $probe = & claude -p "reply with the single word: ok" --output-format json 2>&1 | Out-String
 if ($probe -match "Not logged in" -or $probe -match "/login") {
-    Warn "not signed in — a browser will open. Sign in with the account that has your Claude subscription."
+    Warn "not signed in - a browser will open. Sign in with the account that has your Claude subscription."
     Write-Host "  (type /exit once you're back at the prompt)`n"
     & claude
     $probe = & claude -p "reply with the single word: ok" --output-format json 2>&1 | Out-String
     if ($probe -match "Not logged in") { Die "Still not signed in. Run 'claude' by hand, use /login, then re-run this script." }
 }
 if ($probe -match "ANTHROPIC_API_KEY") {
-    Die "The CLI wants an API key rather than your subscription. Run 'claude' and use /login — the whole point is that subscription runs cost nothing per question."
+    Die "The CLI wants an API key rather than your subscription. Run 'claude' and use /login - the whole point is that subscription runs cost nothing per question."
 }
 Ok "signed in"
 
@@ -93,7 +93,7 @@ if ([string]::IsNullOrWhiteSpace($repo)) {
     $name = [IO.Path]::GetFileNameWithoutExtension($url.TrimEnd('/'))
     $repo = "C:\code\$name"
     if (Test-Path $repo) {
-        Warn "$repo already exists — using it"
+        Warn "$repo already exists - using it"
     } else {
         git clone $url $repo
     }
@@ -165,7 +165,7 @@ if (Get-ScheduledTask -TaskName "PocketClaude relay" -ErrorAction SilentlyContin
                                        -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$relayRoot\relay\run.ps1`""
     $trigger = New-ScheduledTaskTrigger -AtLogOn
     Register-ScheduledTask -TaskName "PocketClaude relay" -Action $action -Trigger $trigger | Out-Null
-    Ok "registered — it will start when you log in"
+    Ok "registered - it will start when you log in"
 } else {
     Warn "not running as Administrator, so the startup task wasn't registered. The relay will only run while you keep a window open."
 }

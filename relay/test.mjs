@@ -8,7 +8,7 @@
 //
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -400,6 +400,42 @@ test("a path cannot be smuggled in as a project name", () => {
 
 test("no project means the configured repository", () => {
   assert.equal(resolveProject(""), process.env.RELAY_REPO ?? process.cwd());
+});
+
+// --- The PowerShell scripts ------------------------------------------------
+//
+// CI has no PowerShell runner, so these scripts cannot be executed here. This
+// checks the one property that broke them in practice and costs nothing to
+// verify from Node.
+//
+// Windows PowerShell 5.1 reads a .ps1 file with no byte-order mark as
+// Windows-1252, not UTF-8. An em dash is E2 80 94 in UTF-8, and cp1252 decodes
+// that last byte as U+201D, a smart closing quote -- which PowerShell honours
+// as a string delimiter. Inside a comment that is harmless. Inside a
+// double-quoted string it terminates the string early, and every brace and
+// quote after it is mismatched, so the file fails to parse with errors that
+// point at lines nowhere near the real one.
+//
+// Keeping these files pure ASCII sidesteps the encoding question entirely.
+
+test("the PowerShell scripts are pure ASCII", () => {
+  const dir = fileURLToPath(new URL(".", import.meta.url));
+  const scripts = readdirSync(dir).filter((name) => name.endsWith(".ps1"));
+  assert.ok(scripts.length > 0, "expected at least one .ps1 file to check");
+
+  for (const name of scripts) {
+    const bytes = readFileSync(join(dir, name));
+    const at = bytes.findIndex((byte) => byte > 0x7f);
+    if (at !== -1) {
+      // Report the line, since a byte offset is not something you can act on.
+      const line = bytes.subarray(0, at).toString("utf8").split("\n").length;
+      assert.fail(
+        `${name} line ${line}: non-ASCII byte 0x${bytes[at].toString(16)}. ` +
+          "Windows PowerShell reads these files as cp1252, where multi-byte " +
+          "UTF-8 can decode into quote characters and break parsing."
+      );
+    }
+  }
 });
 
 console.log(failures === 0 ? "\nall relay tests passed" : `\n${failures} failing`);
