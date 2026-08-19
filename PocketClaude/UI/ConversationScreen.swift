@@ -53,12 +53,20 @@ struct ConversationScreen: View {
                 Text(viewModel.errorMessage ?? "")
             }
         }
-        .task { await viewModel.prepare() }
+        .task {
+            await viewModel.prepare()
+            // Already on from a previous launch: the loop lives with the view
+            // model, not the setting, so something has to start it.
+            if settings.wakeWordEnabled { viewModel.startWakeWord() }
+        }
         .onChange(of: settings.handsFreeMode) { _, enabled in
             if enabled { viewModel.startHandsFree() } else { viewModel.stopHandsFree() }
         }
         .onChange(of: settings.stemPressControl) { _, _ in
             viewModel.applyStemPressSetting()
+        }
+        .onChange(of: settings.wakeWordEnabled) { _, enabled in
+            if enabled { viewModel.startWakeWord() } else { viewModel.stopWakeWord() }
         }
         // Anything else that plays audio — music, a podcast — takes the Now
         // Playing slot, and with it the stem press. Coming back to the

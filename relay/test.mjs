@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { buildArgs, interpret, readHead, projects, resolveProject } from "./server.mjs";
+import { buildArgs, interpret, readHead, projects, resolveProject, cleanTitle } from "./server.mjs";
 
 const SERVER = fileURLToPath(new URL("./server.mjs", import.meta.url));
 let failures = 0;
@@ -400,6 +400,55 @@ test("a path cannot be smuggled in as a project name", () => {
 
 test("no project means the configured repository", () => {
   assert.equal(resolveProject(""), process.env.RELAY_REPO ?? process.cwd());
+});
+
+// --- Session titles --------------------------------------------------------
+//
+// A model asked for four words will sometimes answer in a sentence, in quotes,
+// with a "Title:" prefix, or with a paragraph. Each of those looks like a bug
+// in the list rather than in the prompt, so the cleaner is what stands between
+// the model and the UI.
+
+test("a plain title passes through", () => {
+  assert.equal(cleanTitle("Fix the campsite alert emails"), "Fix the campsite alert emails");
+});
+
+test("surrounding quotes and trailing stops are removed", () => {
+  assert.equal(cleanTitle('"Refactor the booking parser."'), "Refactor the booking parser");
+  assert.equal(cleanTitle("'Add Stripe webhooks'"), "Add Stripe webhooks");
+  assert.equal(cleanTitle("`Debug the cron job`"), "Debug the cron job");
+});
+
+test("a Title: prefix is removed", () => {
+  assert.equal(cleanTitle("Title: Rework the search index"), "Rework the search index");
+  assert.equal(cleanTitle("Session - Rework the search index"), "Rework the search index");
+});
+
+test("a preamble line is discarded in favour of the answer", () => {
+  // Models that explain themselves put the answer last.
+  assert.equal(
+    cleanTitle("Sure, here is a title:\n\nCampsite availability polling"),
+    "Campsite availability polling"
+  );
+});
+
+test("whitespace is collapsed", () => {
+  assert.equal(cleanTitle("  Fix   the   parser  "), "Fix the parser");
+});
+
+test("a paragraph is refused rather than shown", () => {
+  // Better to fall back to the raw first question than to put an essay in a
+  // one-line row.
+  const essay =
+    "This session appears to be about fixing the campsite finder application " +
+    "and its notification pipeline in some detail";
+  assert.equal(cleanTitle(essay), null);
+});
+
+test("empty and non-string input yield null", () => {
+  for (const input of ["", "   ", "\n\n", null, undefined, 42, {}]) {
+    assert.equal(cleanTitle(input), null, `should refuse ${JSON.stringify(input)}`);
+  }
 });
 
 // --- The PowerShell scripts ------------------------------------------------
