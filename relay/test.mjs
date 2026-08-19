@@ -20,6 +20,7 @@ import {
   projects,
   resolveProject,
   cleanTitle,
+  resolveSessionCwd,
   parseCloudSessionId,
   cloudSendArgs,
   teleportArgs,
@@ -459,6 +460,18 @@ test("empty and non-string input yield null", () => {
   for (const input of ["", "   ", "\n\n", null, undefined, 42, {}]) {
     assert.equal(cleanTitle(input), null, `should refuse ${JSON.stringify(input)}`);
   }
+});
+
+// --- Resuming across repositories -------------------------------------------
+
+test("an unknown session id resolves to no directory", () => {
+  // The phone never supplies a path. An id that matches nothing on disk has to
+  // resolve to nothing rather than to a default, or resuming a session that
+  // does not exist would quietly run somewhere else.
+  assert.equal(resolveSessionCwd("no-such-session-id"), null);
+  assert.equal(resolveSessionCwd(""), null);
+  assert.equal(resolveSessionCwd(null), null);
+  assert.equal(resolveSessionCwd(undefined), null);
 });
 
 // --- Cloud sessions --------------------------------------------------------

@@ -439,6 +439,19 @@ final class ConversationViewModel: ObservableObject {
     /// configured repository.
     @Published var activeProject: String = ""
 
+    /// The workspace name to send with a question, or "" to let the relay
+    /// decide.
+    ///
+    /// Empty while resuming, deliberately. A resumed session runs where it
+    /// already lives, and naming its repository only worked when that
+    /// repository happened to be one the relay's allowlist covers — so tapping
+    /// a session from any other checkout failed with "unknown project", after
+    /// the app had just listed it. The name is still shown on the chip; it is
+    /// only not sent.
+    private var projectToSend: String {
+        session.relaySessionID == nil ? activeProject : ""
+    }
+
     /// Sessions and workspaces from the relay, for the dashboard.
     func relayCatalog() async throws -> ([RelaySession], [RelayProject]) {
         guard let client = RelayClient.make(settings: settings) else {
@@ -459,6 +472,23 @@ final class ConversationViewModel: ObservableObject {
             throw RelayError.notConfigured
         }
         try await client.teleport(sessionID: link, project: project)
+    }
+
+    /// Cloud sessions the relay has pulled down before.
+    func cloudSessions() async throws -> [CloudSession] {
+        guard let client = RelayClient.make(settings: settings) else {
+            throw RelayError.notConfigured
+        }
+        return try await client.cloudSessions()
+    }
+
+    /// Re-pulls remembered cloud sessions so their local copies match the
+    /// cloud again. One click for all of them, or one named session.
+    func refreshCloudSessions(sessionID: String? = nil) async throws -> [CloudRefreshResult] {
+        guard let client = RelayClient.make(settings: settings) else {
+            throw RelayError.notConfigured
+        }
+        return try await client.refreshCloudSessions(sessionID: sessionID)
     }
 
     /// Queues a message into a cloud session without bringing it here.
@@ -555,7 +585,7 @@ final class ConversationViewModel: ObservableObject {
             let result = try await client.ask(
                 text: text,
                 sessionID: session.relaySessionID,
-                project: activeProject
+                project: projectToSend
             ) { [weak self] event in
                 self?.handleRelay(event, streaming: streaming)
             }

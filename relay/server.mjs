@@ -102,6 +102,26 @@ function resolveProject(name) {
   return existsSync(match.path) ? match.path : null;
 }
 
+/**
+ * The directory a known local session was recorded in.
+ *
+ * Resuming needs this because the dashboard lists every session on the machine,
+ * including ones in repositories that are not in the allowlist - and refusing
+ * to open something you just listed is not a policy, it is a bug. Asking for a
+ * session in Claude-Speak failed with "unknown project: Claude-Speak" for
+ * exactly that reason.
+ *
+ * This is not a hole in the allowlist. The path is not supplied by the phone;
+ * it comes from the session's own recorded cwd, found by matching an id against
+ * sessions already on disk. An id that matches nothing resolves to nothing.
+ */
+function resolveSessionCwd(sessionId) {
+  if (!sessionId) return null;
+  const match = listSessions({ limit: 500 }).find((s) => s.id === sessionId);
+  if (!match?.projectPath) return null;
+  return existsSync(match.projectPath) ? match.projectPath : null;
+}
+
 /** Short commit of the relay checkout, or null outside a git working tree. */
 function version() {
   try {
@@ -286,9 +306,15 @@ async function handleAsk(req, res) {
     return;
   }
 
+  // Resuming runs where the session already lives. An explicit project still
+  // wins, so moving a session somewhere is possible, but the ordinary case -
+  // tap a session in the list, ask it something - no longer depends on that
+  // session's repository being one the allowlist happens to name.
+  const resumedIn = sessionId && !project ? resolveSessionCwd(sessionId) : null;
+
   // Rejected before the stream opens, so a bad project name is an ordinary
   // HTTP error rather than an error frame the phone has to unpick.
-  const workingDirectory = resolveProject(project);
+  const workingDirectory = resumedIn ?? resolveProject(project);
   if (!workingDirectory) {
     res.writeHead(400, { "content-type": "application/json" });
     res.end(JSON.stringify({ error: `unknown project: ${project}` }));
@@ -402,6 +428,9 @@ function listSessions({ limit = 60 } = {}) {
   if (!existsSync(root)) return [];
 
   const cached = loadTitles();
+  // Older local copies of a cloud session that has since been re-teleported.
+  // Without this every refresh leaves another row behind, all titled the same.
+  const superseded = supersededLocalIds();
   const found = [];
   for (const projectDir of readdirSync(root, { withFileTypes: true })) {
     if (!projectDir.isDirectory()) continue;
@@ -417,6 +446,11 @@ function listSessions({ limit = 60 } = {}) {
       }
       const head = readHead(path);
       const cwd = head.cwd ?? "";
+      // Sessions the titler created before it learned not to. They are real
+      // files with real ids, so they cannot be un-created from here, but they
+      // are noise in every list and nobody wants to resume one.
+      if (head.firstMessage && head.firstMessage.startsWith(TITLE_PROMPT_PREFIX)) continue;
+      if (superseded.has(entry.replace(/\.jsonl$/, ""))) continue;
       found.push({
         id: entry.replace(/\.jsonl$/, ""),
         // From the `cwd` the session itself records. Deriving it from the
@@ -495,6 +529,16 @@ function readHead(path, maxBytes = 64 * 1024) {
   }
 }
 
+/** The last few useful lines of a failed CLI run. */
+function teleportError(error) {
+  return (error.stderr || error.stdout || error.message || "")
+    .split("\n")
+    .filter(Boolean)
+    .slice(-4)
+    .join(" ")
+    .trim();
+}
+
 /** JSON response in one line, since the cloud endpoints send several. */
 function respond(res, status, payload) {
   res.writeHead(status, { "content-type": "application/json" });
@@ -529,6 +573,86 @@ async function readJSON(req) {
 //
 // Teleport is the one that gives a phone the whole loop, because after it runs
 // there is nothing special about the session any more.
+
+// Remembered cloud sessions.
+//
+// There is no way to list cloud sessions - `claude agents --json` covers local
+// background sessions only, and the teleport picker is interactive - so the
+// relay remembers the ones you have pulled before and can re-pull those. That
+// is the difference between "one click to update" and "paste every link again".
+//
+// Each teleport makes a *new* local copy rather than updating the old one, so
+// the previous copies are recorded and filtered out of the session list. Left
+// alone they would pile up: one extra row per refresh, all with the same title.
+
+const CLOUD_PATH = join(homedir(), ".pocketclaude", "cloud.json");
+
+function loadCloud() {
+  try {
+    const parsed = JSON.parse(readFileSync(CLOUD_PATH, "utf8"));
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveCloud(state) {
+  try {
+    mkdirSync(dirname(CLOUD_PATH), { recursive: true });
+    writeFileSync(CLOUD_PATH, JSON.stringify(state, null, 2));
+  } catch {
+    // Losing this costs a re-paste, not correctness.
+  }
+}
+
+/** Every local session id superseded by a later teleport of the same session. */
+function supersededLocalIds() {
+  const ids = new Set();
+  for (const entry of Object.values(loadCloud())) {
+    for (const id of entry.previousIds ?? []) ids.add(id);
+  }
+  return ids;
+}
+
+/**
+ * Teleports one cloud session and records where it landed.
+ *
+ * The landing spot is found by diffing the local session list either side of
+ * the run, because the CLI does not report the local id it created. A diff is
+ * imprecise if something else writes a session at the same moment; the cost of
+ * being wrong is one stale row left visible, so it is not worth more than this.
+ */
+function teleportAndRecord(sessionId, cwd) {
+  const before = new Set(listSessions({ limit: 500 }).map((s) => s.id));
+
+  execFileSync(CLAUDE_BIN, teleportArgs(sessionId), {
+    cwd,
+    encoding: "utf8",
+    timeout: 180_000,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  const after = listSessions({ limit: 500 });
+  const fresh = after.find((s) => !before.has(s.id));
+
+  const state = loadCloud();
+  const existing = state[sessionId] ?? { previousIds: [] };
+  const previousIds = existing.previousIds ?? [];
+  // The copy this refresh replaces becomes a previous one.
+  if (existing.localId && existing.localId !== fresh?.id) {
+    previousIds.push(existing.localId);
+  }
+  state[sessionId] = {
+    localId: fresh?.id ?? existing.localId ?? null,
+    project: fresh?.project ?? existing.project ?? null,
+    title: fresh?.title ?? existing.title ?? null,
+    cwd,
+    previousIds,
+    updatedAt: new Date().toISOString(),
+  };
+  saveCloud(state);
+  return state[sessionId];
+}
 
 /**
  * Extracts a cloud session id from a bare id or a claude.ai/code URL.
@@ -576,6 +700,14 @@ function teleportArgs(sessionId) {
 // never costs a second call.
 
 const TITLES_PATH = join(homedir(), ".pocketclaude", "titles.json");
+
+// Shared by the prompt and by the filter that hides sessions the titler created
+// before it stopped creating them. Keeping one constant means the two cannot
+// drift apart and start missing each other.
+const TITLE_PROMPT_PREFIX =
+  "Give a title of at most five words for a coding session that began with " +
+  "the message below. Reply with the title alone: no quotes, no punctuation " +
+  "at the end, no explanation.\n\n";
 
 function loadTitles() {
   try {
@@ -630,14 +762,16 @@ function cleanTitle(raw) {
 
 /** Asks a small model for a few words. Returns null on any failure. */
 function nameSession(text) {
-  const prompt =
-    "Give a title of at most five words for a coding session that began with " +
-    "the message below. Reply with the title alone: no quotes, no punctuation " +
-    "at the end, no explanation.\n\n" +
-    text.slice(0, 500);
+  const prompt = TITLE_PROMPT_PREFIX + text.slice(0, 500);
 
   try {
-    const out = execFileSync(CLAUDE_BIN, ["-p", prompt, "--model", "haiku"], {
+    // --no-session-persistence, or naming a session creates a session. Every
+    // title written one more row into the dashboard, whose first message was
+    // the titling prompt itself - visible in the app as "Continuing 'Give a
+    // title of at most five words...'". The titler was polluting the list it
+    // exists to tidy.
+    const args = ["-p", prompt, "--model", "haiku", "--no-session-persistence"];
+    const out = execFileSync(CLAUDE_BIN, args, {
       encoding: "utf8",
       timeout: 30_000,
       // Inherit nothing on stdin: without this the CLI can wait on a tty that
@@ -774,26 +908,61 @@ const server = createServer((req, res) => {
         if (!cwd) return respond(res, 400, { error: "Unknown workspace." });
 
         try {
-          const output = execFileSync(CLAUDE_BIN, teleportArgs(sessionId), {
-            cwd,
-            encoding: "utf8",
-            timeout: 180_000,
-            // No stdin: teleport prompts to stash uncommitted changes, and a
-            // prompt nobody can answer would hang until the timeout. Closing
-            // stdin makes it fail fast instead, and the message says why.
-            stdio: ["ignore", "pipe", "pipe"],
-          });
-          respond(res, 200, { ok: true, sessionId, output: output.slice(-2000) });
+          // No stdin anywhere below: teleport prompts to stash uncommitted
+          // changes, and a prompt nobody can answer would hang until the
+          // timeout. Closing stdin makes it fail fast, and the message says why.
+          const record = teleportAndRecord(sessionId, cwd);
+          respond(res, 200, { ok: true, sessionId, ...record });
         } catch (error) {
-          respond(res, 502, {
-            error: (error.stderr || error.stdout || error.message || "")
-              .split("\n")
-              .filter(Boolean)
-              .slice(-4)
-              .join(" ")
-              .trim(),
-          });
+          respond(res, 502, { error: teleportError(error) });
         }
+      })
+      .catch((error) => respond(res, 400, { error: error.message }));
+    return;
+  }
+
+  if (req.method === "GET" && req.url === "/cloud") {
+    const state = loadCloud();
+    respond(res, 200, {
+      sessions: Object.entries(state).map(([cloudId, entry]) => ({
+        cloudId,
+        localId: entry.localId ?? null,
+        title: entry.title ?? null,
+        project: entry.project ?? null,
+        updatedAt: entry.updatedAt ?? null,
+      })),
+    });
+    return;
+  }
+
+  if (req.method === "POST" && req.url === "/cloud/refresh") {
+    readJSON(req)
+      .then((body) => {
+        const state = loadCloud();
+        // One named session, or every remembered one. Refreshing all is the
+        // "one click" case and is why this is a list rather than a flag.
+        const only = body.sessionId ? parseCloudSessionId(body.sessionId) : null;
+        if (body.sessionId && !only) {
+          return respond(res, 400, { error: "That doesn't look like a cloud session id." });
+        }
+        const targets = only ? [only] : Object.keys(state);
+        if (!targets.length) {
+          return respond(res, 200, { results: [], note: "No cloud sessions have been brought here yet." });
+        }
+
+        // Reported per session, never as one pass/fail: a repository with
+        // uncommitted changes fails teleport, and one such repository should
+        // not hide the others that refreshed cleanly.
+        const results = targets.map((cloudId) => {
+          const cwd = state[cloudId]?.cwd ?? REPO;
+          try {
+            const record = teleportAndRecord(cloudId, cwd);
+            return { cloudId, ok: true, localId: record.localId, title: record.title };
+          } catch (error) {
+            return { cloudId, ok: false, error: teleportError(error) };
+          }
+        });
+        respond(res, 200, { results });
       })
       .catch((error) => respond(res, 400, { error: error.message }));
     return;
@@ -896,6 +1065,7 @@ export {
   projects,
   resolveProject,
   cleanTitle,
+  resolveSessionCwd,
   parseCloudSessionId,
   cloudSendArgs,
   teleportArgs,
