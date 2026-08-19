@@ -65,6 +65,28 @@ PocketClaude relay on http://0.0.0.0:8787
 Check it from the phone's browser at `http://<tailscale-name>:8787/health` —
 you should get `{"ok":true,...}`.
 
+### On Windows, use `run.ps1`
+
+```powershell
+cd C:\code\Claude-Speak
+.\relay\run.ps1
+```
+
+Two things it does that `node server.mjs` does not:
+
+- **Restarts after an update.** The relay exits with code 42 when the app's
+  *Update and restart relay* button has pulled new code. Without a supervisor
+  it pulls the new version and keeps running the old one.
+- **Remembers the token.** `$env:RELAY_TOKEN = "..."` lasts only as long as
+  that window, so a fresh PowerShell fails with `RELAY_TOKEN is required` —
+  which reads as a broken relay rather than a missing variable. `run.ps1` asks
+  once, saves it as a user environment variable, and never asks again.
+
+It also passes `RELAY_REPO`, `RELAY_PORT`, `RELAY_MODEL`, `RELAY_PROJECTS` and
+`RELAY_SCRATCH` through from the registry. PowerShell reads `$env:` once at
+process start, so a value `setup.ps1` saved after the window opened is
+invisible to `$env:` but is still found here.
+
 ### Configuration
 
 | Variable | Default | What it does |
