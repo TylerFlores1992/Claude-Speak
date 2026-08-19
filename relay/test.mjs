@@ -462,6 +462,44 @@ test("empty and non-string input yield null", () => {
   }
 });
 
+// --- Model and effort ------------------------------------------------------
+//
+// Both arrive from the phone and become command-line arguments, so they are
+// allowlisted rather than passed through.
+
+test("the phone's model and effort win over the server default", () => {
+  const args = buildArgs({ text: "hi", model: "claude-opus-5", effort: "high" });
+  assert.ok(args.includes("--model"));
+  assert.equal(args[args.indexOf("--model") + 1], "claude-opus-5");
+  assert.equal(args[args.indexOf("--effort") + 1], "high");
+});
+
+test("a model or effort that is not on the list is ignored", () => {
+  for (const attempt of [
+    "opus --dangerously-skip-permissions",
+    "--permission-mode",
+    "; rm -rf /",
+    "gpt-4",
+    "",
+  ]) {
+    const args = buildArgs({ text: "hi", model: attempt, effort: attempt });
+    const model = args.indexOf("--model");
+    assert.ok(model === -1 || args[model + 1] !== attempt, `leaked model ${attempt}`);
+    assert.equal(args.indexOf("--effort"), -1, `leaked effort ${attempt}`);
+  }
+});
+
+test("aliases and full model names are both accepted", () => {
+  for (const name of ["opus", "sonnet", "haiku", "claude-sonnet-5"]) {
+    const args = buildArgs({ text: "hi", model: name });
+    assert.equal(args[args.indexOf("--model") + 1], name, `rejected ${name}`);
+  }
+});
+
+test("effort is only sent when asked for", () => {
+  assert.equal(buildArgs({ text: "hi" }).indexOf("--effort"), -1);
+});
+
 // --- Resuming across repositories -------------------------------------------
 
 test("an unknown session id resolves to no directory", () => {

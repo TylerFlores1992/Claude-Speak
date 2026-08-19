@@ -100,7 +100,13 @@ struct RelayClient {
         return RelayClient(baseURL: url, token: token)
     }
 
-    func makeRequest(text: String, sessionID: String?, project: String = "") throws -> URLRequest {
+    func makeRequest(
+        text: String,
+        sessionID: String?,
+        project: String = "",
+        model: String = "",
+        effort: String = ""
+    ) throws -> URLRequest {
         guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
             throw RelayError.invalidURL(baseURL.absoluteString)
         }
@@ -123,6 +129,10 @@ struct RelayClient {
         // Omitted rather than empty when unset, so the relay falls back to its
         // configured repository instead of failing an allowlist lookup on "".
         if !project.isEmpty { body["project"] = .string(project) }
+        // Sent so the composer chip means something. Omitted when empty, so the
+        // relay keeps using its own RELAY_MODEL rather than being handed "".
+        if !model.isEmpty { body["model"] = .string(model) }
+        if !effort.isEmpty { body["effort"] = .string(effort) }
         request.httpBody = try JSONEncoder().encode(JSONValue.object(body))
         return request
     }
@@ -136,9 +146,17 @@ struct RelayClient {
         text: String,
         sessionID: String?,
         project: String = "",
+        model: String = "",
+        effort: String = "",
         onEvent: @escaping EventHandler
     ) async throws -> RelayResult {
-        let request = try makeRequest(text: text, sessionID: sessionID, project: project)
+        let request = try makeRequest(
+            text: text,
+            sessionID: sessionID,
+            project: project,
+            model: model,
+            effort: effort
+        )
         let (bytes, response) = try await session.bytes(for: request)
 
         if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {

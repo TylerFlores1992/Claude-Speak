@@ -585,7 +585,9 @@ final class ConversationViewModel: ObservableObject {
             let result = try await client.ask(
                 text: text,
                 sessionID: session.relaySessionID,
-                project: projectToSend
+                project: projectToSend,
+                model: settings.model.rawValue,
+                effort: settings.model.supportsAdaptiveThinking ? settings.effort.rawValue : ""
             ) { [weak self] event in
                 self?.handleRelay(event, streaming: streaming)
             }

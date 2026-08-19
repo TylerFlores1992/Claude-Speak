@@ -214,7 +214,23 @@ function sse(res, event, payload) {
   res.write(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`);
 }
 
-function buildArgs({ text, sessionId }) {
+// What the phone is allowed to ask for. Allowlists rather than pass-through:
+// both values become command-line arguments, and "opus --dangerously-skip-
+// permissions" must not be reachable by typing it into a picker.
+const ALLOWED_MODELS = new Set([
+  "opus", "sonnet", "haiku", "fable",
+  "claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5",
+]);
+const ALLOWED_EFFORTS = new Set(["low", "medium", "high", "xhigh", "max"]);
+
+/** The requested value if it is one we permit, otherwise null. */
+function allowedOrNull(value, permitted) {
+  if (typeof value !== "string") return null;
+  const cleaned = value.trim().toLowerCase();
+  return permitted.has(cleaned) ? cleaned : null;
+}
+
+function buildArgs({ text, sessionId, model, effort }) {
   const args = ["-p", text];
   // --resume keeps the conversation going across questions. Claude Code finds
   // the session by ID in any project on the machine.
@@ -222,7 +238,16 @@ function buildArgs({ text, sessionId }) {
   args.push("--output-format", "stream-json", "--verbose", "--include-partial-messages");
   args.push("--permission-mode", PERMISSION_MODE);
   if (ALLOWED_TOOLS) args.push("--allowedTools", ALLOWED_TOOLS);
-  if (MODEL) args.push("--model", MODEL);
+
+  // The phone's choice wins over the server default, because the phone is
+  // where the chip that claims to control it lives. Until now that chip said
+  // "Opus 5 High" while the relay ran whatever RELAY_MODEL happened to be -
+  // usually sonnet, since setup.ps1 sets it. A control that does nothing is
+  // worse than no control.
+  const requestedModel = allowedOrNull(model, ALLOWED_MODELS);
+  const requestedEffort = allowedOrNull(effort, ALLOWED_EFFORTS);
+  if (requestedModel ?? MODEL) args.push("--model", requestedModel ?? MODEL);
+  if (requestedEffort) args.push("--effort", requestedEffort);
   return args;
 }
 
@@ -299,6 +324,8 @@ async function handleAsk(req, res) {
   const sessionId = typeof payload.sessionId === "string" && payload.sessionId
     ? payload.sessionId
     : null;
+  const model = typeof payload.model === "string" ? payload.model : "";
+  const effort = typeof payload.effort === "string" ? payload.effort : "";
 
   if (!text) {
     res.writeHead(400, { "content-type": "application/json" });
@@ -330,7 +357,7 @@ async function handleAsk(req, res) {
     "x-accel-buffering": "no",
   });
 
-  const child = spawn(CLAUDE_BIN, buildArgs({ text, sessionId }), {
+  const child = spawn(CLAUDE_BIN, buildArgs({ text, sessionId, model, effort }), {
     cwd: workingDirectory,
     // Inherit the environment so the CLI finds your logged-in credentials.
     env: process.env,
