@@ -48,3 +48,32 @@ final class PairingLinkTests: XCTestCase {
         }
     }
 }
+
+/// `URL(string:)` is far more permissive than it looks — `mini-pc:8788` parses
+/// with scheme `mini-pc`. That made `url.scheme != nil` accept an address no
+/// request could be sent to, in four places at once.
+final class RelayAddressTests: XCTestCase {
+
+    func testAcceptsHTTPAndHTTPS() {
+        XCTAssertTrue(RelayAddress.isUsable("http://100.119.76.63:8788"))
+        XCTAssertTrue(RelayAddress.isUsable("https://relay.example.com"))
+        XCTAssertTrue(RelayAddress.isUsable("  http://mini-pc:8788  "), "should tolerate padding")
+    }
+
+    func testRefusesABareHostAndPort() {
+        // The case that slipped through: this parses as scheme "mini-pc".
+        XCTAssertFalse(RelayAddress.isUsable("mini-pc:8788"))
+        XCTAssertFalse(RelayAddress.isUsable("100.119.76.63:8788"))
+    }
+
+    func testRefusesOtherSchemes() {
+        for address in ["ftp://host", "file:///etc/passwd", "ws://host:8788"] {
+            XCTAssertFalse(RelayAddress.isUsable(address), "should refuse \(address)")
+        }
+    }
+
+    func testRefusesASchemeWithNoHost() {
+        XCTAssertFalse(RelayAddress.isUsable("http://"))
+        XCTAssertFalse(RelayAddress.isUsable(""))
+    }
+}

@@ -77,8 +77,8 @@ struct SettingsView: View {
     private var relayAddressProblem: String? {
         let trimmed = settings.relayURLString.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { return "No address set" }
-        guard let url = URL(string: trimmed), url.scheme != nil else {
-            return "Needs a scheme, e.g. http://100.x.y.z:8788"
+        guard RelayAddress.isUsable(trimmed) else {
+            return "Needs http:// or https://, e.g. http://100.x.y.z:8788"
         }
         return nil
     }

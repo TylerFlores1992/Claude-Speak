@@ -33,7 +33,7 @@ struct PairingLink: Equatable {
               let token = value("token"), !token.isEmpty,
               // Must be a usable address, not just any text: a link with a
               // mangled URL should fail loudly at the tap, not later.
-              let parsed = URL(string: relay), parsed.scheme != nil
+              RelayAddress.isUsable(relay)
         else { return nil }
 
         self.relayURL = relay
