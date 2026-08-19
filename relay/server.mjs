@@ -13,7 +13,7 @@
 import { execFileSync, spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { timingSafeEqual } from "node:crypto";
-import { existsSync, readdirSync, realpathSync, openSync, readSync, closeSync, statSync } from "node:fs";
+import { existsSync, readdirSync, realpathSync, openSync, readSync, closeSync, statSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { mkdirSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
@@ -24,6 +24,13 @@ const HOST = process.env.RELAY_HOST ?? "0.0.0.0";
 const TOKEN = process.env.RELAY_TOKEN ?? "";
 const REPO = process.env.RELAY_REPO ?? process.cwd();
 const CLAUDE_BIN = process.env.RELAY_CLAUDE_BIN ?? "claude";
+// Naming sessions costs a small model call each, once per session, cached
+// forever. Set to "0" to keep the raw first question as the title instead.
+const AUTO_TITLE = (process.env.RELAY_AUTO_TITLE ?? "1") !== "0";
+// How many unnamed sessions to name per /sessions request. Bounded because
+// each one spawns a process: naming sixty at once on the first refresh would
+// be indistinguishable from a fork bomb.
+const TITLES_PER_REFRESH = Number(process.env.RELAY_TITLES_PER_REFRESH ?? 5);
 const MODEL = process.env.RELAY_MODEL ?? "";
 const TIMEOUT_MS = Number(process.env.RELAY_TIMEOUT_MS ?? 300_000);
 
@@ -390,6 +397,7 @@ function listSessions({ limit = 60 } = {}) {
   const root = join(homedir(), ".claude", "projects");
   if (!existsSync(root)) return [];
 
+  const cached = loadTitles();
   const found = [];
   for (const projectDir of readdirSync(root, { withFileTypes: true })) {
     if (!projectDir.isDirectory()) continue;
@@ -415,7 +423,13 @@ function listSessions({ limit = 60 } = {}) {
         projectPath: cwd || projectDir.name,
         updatedAt: stat.mtime.toISOString(),
         bytes: stat.size,
-        title: head.title,
+        // Order matters: a title you set by hand outranks a generated one,
+        // which outranks the raw first question.
+        title: head.hasExplicitTitle
+          ? head.title
+          : cached[entry.replace(/\.jsonl$/, "")] ?? head.title,
+        hasExplicitTitle: head.hasExplicitTitle,
+        firstMessage: head.firstMessage,
       });
     }
   }
@@ -435,6 +449,8 @@ function readHead(path, maxBytes = 64 * 1024) {
 
     let title = null;
     let cwd = null;
+    let firstMessage = null;
+    let hasExplicitTitle = false;
     for (const line of head.split("\n")) {
       if (!line.trim()) continue;
       let event;
@@ -447,6 +463,7 @@ function readHead(path, maxBytes = 64 * 1024) {
       // An explicit title wins over a guess from the first question.
       if (event.type === "custom-title" && event.customTitle) {
         title = event.customTitle;
+        hasExplicitTitle = true;
       } else if (!title) {
         const content =
           typeof event.content === "string"
@@ -456,16 +473,134 @@ function readHead(path, maxBytes = 64 * 1024) {
               : Array.isArray(event.message?.content)
                 ? event.message.content.find((b) => b?.type === "text")?.text
                 : null;
-        if (content) title = firstLine(content);
+        if (content) {
+          title = firstLine(content);
+          // Kept untruncated for the namer: five words summarising eighty
+          // characters of a question is a worse title than five words
+          // summarising the question.
+          firstMessage = content.slice(0, 500);
+        }
       }
       if (title && cwd) break;
     }
-    return { title: title ?? "Untitled session", cwd };
+    return { title: title ?? "Untitled session", cwd, firstMessage, hasExplicitTitle };
   } catch {
-    return { title: "Untitled session", cwd: null };
+    return { title: "Untitled session", cwd: null, firstMessage: null, hasExplicitTitle: false };
   } finally {
     if (fd !== undefined) closeSync(fd);
   }
+}
+
+// --- Session titles --------------------------------------------------------
+//
+// A session's title is otherwise its first question verbatim, which is how a
+// list ends up showing six rows of "What does this proje...". Claude Code only
+// writes a `custom-title` event when you set one by hand, so nothing names
+// these on its own.
+//
+// Titles are generated once by a small model and cached on disk forever. The
+// cache is keyed by session id, so a session that grows never gets renamed and
+// never costs a second call.
+
+const TITLES_PATH = join(homedir(), ".pocketclaude", "titles.json");
+
+function loadTitles() {
+  try {
+    const parsed = JSON.parse(readFileSync(TITLES_PATH, "utf8"));
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    // Missing, unreadable, or corrupt all mean the same thing here: no titles
+    // yet. A cache that throws would take the whole session list down with it.
+    return {};
+  }
+}
+
+function saveTitles(titles) {
+  try {
+    mkdirSync(dirname(TITLES_PATH), { recursive: true });
+    writeFileSync(TITLES_PATH, JSON.stringify(titles, null, 2));
+  } catch {
+    // Losing the cache costs a regenerated title, not correctness.
+  }
+}
+
+/**
+ * Trims a model's answer down to something that fits in a list row.
+ *
+ * Separate from the spawn so it can be tested: a model asked for four words
+ * will sometimes return a sentence, quotes, a trailing full stop, or a polite
+ * preamble, and all of those look like bugs in the UI rather than in the
+ * prompt.
+ */
+function cleanTitle(raw) {
+  if (typeof raw !== "string") return null;
+  let text = raw.trim();
+  if (!text) return null;
+
+  // Models like to answer in prose. Take the last non-empty line, which is
+  // where the actual answer lands when one does.
+  const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+  if (!lines.length) return null;
+  text = lines[lines.length - 1];
+
+  text = text.replace(/^["'`]+|["'`]+$/g, "");
+  text = text.replace(/^(title|session)\s*[:\-]\s*/i, "");
+  text = text.replace(/[.]+$/, "");
+  text = text.replace(/\s+/g, " ").trim();
+
+  if (!text) return null;
+  // A "title" that is really a paragraph means the model ignored the prompt;
+  // the raw first question is a better fallback than a wall of text.
+  if (text.length > 60) return null;
+  return text;
+}
+
+/** Asks a small model for a few words. Returns null on any failure. */
+function nameSession(text) {
+  const prompt =
+    "Give a title of at most five words for a coding session that began with " +
+    "the message below. Reply with the title alone: no quotes, no punctuation " +
+    "at the end, no explanation.\n\n" +
+    text.slice(0, 500);
+
+  try {
+    const out = execFileSync(CLAUDE_BIN, ["-p", prompt, "--model", "haiku"], {
+      encoding: "utf8",
+      timeout: 30_000,
+      // Inherit nothing on stdin: without this the CLI can wait on a tty that
+      // is not there and hang until the timeout.
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return cleanTitle(out);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Names up to TITLES_PER_REFRESH sessions that do not have a title yet.
+ *
+ * Called after the response has been sent, so a slow model never delays the
+ * list. Newest first, because those are the ones being looked at; over a few
+ * refreshes the backlog drains.
+ */
+function fillMissingTitles(sessions) {
+  if (!AUTO_TITLE) return;
+  const titles = loadTitles();
+  const pending = sessions
+    .filter((s) => !titles[s.id] && !s.hasExplicitTitle && s.firstMessage)
+    .slice(0, TITLES_PER_REFRESH);
+  if (!pending.length) return;
+
+  let changed = false;
+  for (const session of pending) {
+    const title = nameSession(session.firstMessage);
+    if (title) {
+      titles[session.id] = title;
+      changed = true;
+    }
+  }
+  if (changed) saveTitles(titles);
 }
 
 function firstLine(text) {
@@ -515,8 +650,19 @@ const server = createServer((req, res) => {
 
   if (req.method === "GET" && req.url === "/sessions") {
     try {
+      const sessions = listSessions();
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ sessions: listSessions() }));
+      // firstMessage is only here to feed the namer; sending a phone 60 copies
+      // of a 500-character question to render 60 one-line rows is waste.
+      res.end(
+        JSON.stringify({
+          sessions: sessions.map(({ firstMessage, hasExplicitTitle, ...rest }) => rest),
+        })
+      );
+      // After the response, never before: naming spawns a process per session
+      // and the list should never wait on it. New titles appear on the next
+      // pull-to-refresh.
+      setImmediate(() => fillMissingTitles(sessions));
     } catch (error) {
       res.writeHead(500, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: error.message }));
@@ -573,4 +719,4 @@ if (isEntryPoint()) {
 }
 
 // Exported for the test script; importing this file starts nothing.
-export { interpret, buildArgs, readHead, listSessions, projects, resolveProject };
+export { interpret, buildArgs, readHead, listSessions, projects, resolveProject, cleanTitle };

@@ -331,8 +331,15 @@ struct SettingsView: View {
         Section {
             Toggle("Prefer on-device recognition", isOn: $settings.preferOnDeviceRecognition)
             Toggle("AirPod stem press starts talking", isOn: $settings.stemPressControl)
+            Toggle("Wake word", isOn: $settings.wakeWordEnabled)
+            if settings.wakeWordEnabled {
+                TextField("Wake phrase", text: $settings.wakePhrase)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+            }
+
             Toggle("Hands-free mode", isOn: $settings.handsFreeMode)
-            if settings.handsFreeMode {
+            if settings.handsFreeMode || settings.wakeWordEnabled {
                 TextField("End keyword", text: $settings.handsFreeEndKeyword)
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
@@ -340,7 +347,7 @@ struct SettingsView: View {
         } header: {
             Text("Voice in")
         } footer: {
-            Text("On-device recognition keeps audio off Apple's servers and works with no signal, but on some devices it reports words as you speak and then finishes with nothing — the question is lost silently. It's off by default for that reason; turn it on and check it actually sends. iOS gives apps no direct access to AirPods gestures. Stem press works by holding the Now Playing slot and reading the play/pause command a squeeze produces. Only one app can hold that slot, so while this is on it plays silence to keep it — you can't listen to music or a podcast on the same device, and it uses battery. Starting a take needs the screen on: a locked device won't hand the microphone to a backgrounded app, and taking the microphone is also what gives up the Now Playing slot, so the two can't both be held. Hands-free mode keeps the microphone open while the app is in the foreground and sends when it hears your end keyword — it drains the battery noticeably and stops when the app is backgrounded.")
+            Text("Wake word is the one way to ask a question with the phone locked and pocketed. It works because iOS lets an app that already holds the microphone keep recording in the background, even though it will not hand the microphone to a backgrounded app in the first place — so the microphone is taken while the app is open and never let go. That costs battery, and it turns the AirPod stem press off: holding the microphone is exactly what gives up the Now Playing slot a stem press travels down. Say the phrase, wait for the beep, ask, then either say your end keyword or just stop talking. On-device recognition keeps audio off Apple's servers and works with no signal, but on some devices it reports words as you speak and then finishes with nothing — the question is lost silently. It's off by default for that reason; turn it on and check it actually sends. iOS gives apps no direct access to AirPods gestures. Stem press works by holding the Now Playing slot and reading the play/pause command a squeeze produces. Only one app can hold that slot, so while this is on it plays silence to keep it — you can't listen to music or a podcast on the same device, and it uses battery. Starting a take needs the screen on: a locked device won't hand the microphone to a backgrounded app, and taking the microphone is also what gives up the Now Playing slot, so the two can't both be held. Hands-free mode keeps the microphone open while the app is in the foreground and sends when it hears your end keyword — it drains the battery noticeably and stops when the app is backgrounded.")
         }
     }
 

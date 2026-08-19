@@ -162,6 +162,15 @@ final class AppSettings: ObservableObject {
     @Published var stemPressControl: Bool {
         didSet { defaults.set(stemPressControl, forKey: Keys.stemPressControl) }
     }
+    /// Listen continuously for a wake phrase, so a question can be asked with
+    /// the phone pocketed and no button press at all.
+    @Published var wakeWordEnabled: Bool {
+        didSet { defaults.set(wakeWordEnabled, forKey: Keys.wakeWordEnabled) }
+    }
+    @Published var wakePhrase: String {
+        didSet { defaults.set(wakePhrase, forKey: Keys.wakePhrase) }
+    }
+
     /// Speak the confirmation prompt for write actions out loud.
     @Published var speakConfirmations: Bool {
         didSet { defaults.set(speakConfirmations, forKey: Keys.speakConfirmations) }
@@ -188,6 +197,8 @@ final class AppSettings: ObservableObject {
         static let useStructuredOutput = "settings.useStructuredOutput"
         static let speakConfirmations = "settings.speakConfirmations"
         static let stemPressControl = "settings.stemPressControl"
+        static let wakeWordEnabled = "settings.wakeWordEnabled"
+        static let wakePhrase = "settings.wakePhrase"
     }
 
     init(defaults: UserDefaults = .standard) {
@@ -218,6 +229,10 @@ final class AppSettings: ObservableObject {
         self.useStructuredOutput = defaults.bool(forKey: Keys.useStructuredOutput)
         self.speakConfirmations = defaults.object(forKey: Keys.speakConfirmations) as? Bool ?? true
         self.stemPressControl = defaults.bool(forKey: Keys.stemPressControl)
+        self.wakeWordEnabled = defaults.bool(forKey: Keys.wakeWordEnabled)
+        // Two words, both common, and unlikely as a pair in ordinary speech —
+        // a one-word phrase fires on the radio.
+        self.wakePhrase = defaults.string(forKey: Keys.wakePhrase) ?? "hey claude"
     }
 
     /// Split `owner/repo` into its parts. Returns nil when unset or malformed.

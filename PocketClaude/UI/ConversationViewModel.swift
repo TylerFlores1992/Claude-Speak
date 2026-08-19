@@ -67,6 +67,7 @@ final class ConversationViewModel: ObservableObject {
     private var pendingConfirmationPrompt: String?
 
     private var handsFreeTask: Task<Void, Never>?
+    private var wakeWordTask: Task<Void, Never>?
 
     /// Swift note: `recognizer` and `speech` take `nil` defaults and are built in
     /// the body rather than as default argument values. A default argument
@@ -303,6 +304,130 @@ final class ConversationViewModel: ObservableObject {
                 return
             }
             try? await Task.sleep(nanoseconds: 200_000_000)
+        }
+    }
+
+    // MARK: - Wake word
+
+    /// Listens continuously for a wake phrase, so a question needs no button.
+    ///
+    /// This is the one path that works with the phone locked and pocketed, and
+    /// it works for a specific reason: iOS will not hand the microphone to a
+    /// backgrounded app, but it will let an app that already holds it keep
+    /// recording, given the `audio` background mode. So the microphone is
+    /// acquired while the app is open and never released - which is also why
+    /// this costs battery, and why the AirPod stem press cannot be used at the
+    /// same time. Holding the microphone is exactly what gives up the Now
+    /// Playing slot the stem press travels down.
+    func startWakeWord() {
+        guard wakeWordTask == nil else { return }
+        // The stem press and the wake word want the audio session in two
+        // incompatible categories. Saying so once here beats leaving a toggle
+        // on that silently does nothing.
+        if settings.stemPressControl {
+            settings.stemPressControl = false
+            applyStemPressSetting()
+        }
+        wakeWordTask = Task { [weak self] in
+            await self?.runWakeWordLoop()
+        }
+    }
+
+    func stopWakeWord() {
+        wakeWordTask?.cancel()
+        wakeWordTask = nil
+        Task { _ = await recognizer.stopAndAwaitTranscript(timeout: 0.1) }
+    }
+
+    private func runWakeWordLoop() async {
+        // Apple's server-based recogniser stops after roughly a minute per
+        // request, without an error you can see. Restarting well inside that
+        // window is what keeps this alive for hours.
+        let maxTakeSeconds: TimeInterval = 45
+        // How long the transcript must stop growing before a question counts as
+        // finished. Long enough to think mid-sentence, short enough not to feel
+        // broken.
+        let silenceSeconds: TimeInterval = 1.6
+
+        var takeStartedAt = Date.distantPast
+        var lastQuestion: String?
+        var lastChangeAt = Date()
+        var hasCued = false
+
+        while !Task.isCancelled && settings.wakeWordEnabled {
+            // Never listen while Claude is answering: the answer is spoken out
+            // loud, and a microphone that hears "hey Claude" in its own reply
+            // would question itself in a loop.
+            guard state == .idle else {
+                if recognizer.isRecording {
+                    _ = await recognizer.stopAndAwaitTranscript(timeout: 0.1)
+                }
+                lastQuestion = nil
+                hasCued = false
+                try? await Task.sleep(nanoseconds: 400_000_000)
+                continue
+            }
+
+            if !recognizer.isRecording {
+                do {
+                    try await recognizer.start(preferOnDevice: settings.preferOnDeviceRecognition)
+                    takeStartedAt = Date()
+                    lastQuestion = nil
+                    hasCued = false
+                } catch {
+                    // Usually the microphone is briefly unavailable - a phone
+                    // call, Siri. Wait rather than spin.
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                    continue
+                }
+            }
+
+            let detector = WakeWordDetector(
+                phrase: settings.wakePhrase,
+                endKeyword: settings.handsFreeEndKeyword
+            )
+            let question = detector.pendingQuestion(in: recognizer.transcript)
+
+            if let question {
+                if !hasCued {
+                    // The same cue as a squeeze, so "it heard me" sounds the
+                    // same however the take started.
+                    Cues.listening()
+                    hasCued = true
+                }
+                if question != lastQuestion {
+                    lastQuestion = question
+                    lastChangeAt = Date()
+                }
+
+                let finishedTalking = !question.isEmpty
+                    && Date().timeIntervalSince(lastChangeAt) >= silenceSeconds
+
+                if detector.isComplete(question) || finishedTalking {
+                    let text = detector.stripEndKeyword(from: question)
+                    _ = await recognizer.stopAndAwaitTranscript(timeout: 0.3)
+                    lastQuestion = nil
+                    hasCued = false
+                    if !text.isEmpty {
+                        Cues.stoppedListening()
+                        await send(text)
+                    }
+                    continue
+                }
+            }
+
+            // Recycle the take before the recogniser gives up on its own. Only
+            // while nothing is half-said, so a restart never eats a question.
+            if question == nil, Date().timeIntervalSince(takeStartedAt) > maxTakeSeconds {
+                _ = await recognizer.stopAndAwaitTranscript(timeout: 0.1)
+                continue
+            }
+
+            try? await Task.sleep(nanoseconds: 250_000_000)
+        }
+
+        if recognizer.isRecording {
+            _ = await recognizer.stopAndAwaitTranscript(timeout: 0.1)
         }
     }
 
