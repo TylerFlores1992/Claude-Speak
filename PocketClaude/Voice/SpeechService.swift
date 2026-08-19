@@ -280,6 +280,10 @@ extension SpeechService: AVSpeechSynthesizerDelegate {
         queuedUtterances = max(0, queuedUtterances - 1)
         guard queuedUtterances == 0, !streamIsOpen else { return }
         isSpeaking = false
+        // Only does anything in mixing mode. Without it the other app stays
+        // ducked after the answer ends, so music comes back quiet and never
+        // recovers until something else claims the route.
+        AudioSessionController.releaseAfterSpeaking()
     }
 }
 
@@ -290,6 +294,9 @@ extension SpeechService: AVAudioPlayerDelegate {
         _ player: AVAudioPlayer,
         successfully flag: Bool
     ) {
-        Task { @MainActor [weak self] in self?.isSpeaking = false }
+        Task { @MainActor [weak self] in
+            self?.isSpeaking = false
+            AudioSessionController.releaseAfterSpeaking()
+        }
     }
 }
