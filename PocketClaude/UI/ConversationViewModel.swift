@@ -449,6 +449,18 @@ final class ConversationViewModel: ObservableObject {
         return try await (sessions, projects)
     }
 
+    /// Brings a cloud session onto the relay machine.
+    ///
+    /// The link is passed through as typed; the relay is what decides whether
+    /// it is a session id, since that value becomes a command-line argument
+    /// there and validating it anywhere else would be advisory.
+    func teleport(link: String, project: String) async throws {
+        guard let client = RelayClient.make(settings: settings) else {
+            throw RelayError.notConfigured
+        }
+        try await client.teleport(sessionID: link, project: project)
+    }
+
     /// Picks up a Claude Code session that already exists on the relay machine,
     /// including one started at the keyboard.
     ///

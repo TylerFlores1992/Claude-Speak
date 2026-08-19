@@ -13,7 +13,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { buildArgs, interpret, readHead, projects, resolveProject, cleanTitle } from "./server.mjs";
+import {
+  buildArgs,
+  interpret,
+  readHead,
+  projects,
+  resolveProject,
+  cleanTitle,
+  parseCloudSessionId,
+  cloudSendArgs,
+  teleportArgs,
+} from "./server.mjs";
 
 const SERVER = fileURLToPath(new URL("./server.mjs", import.meta.url));
 let failures = 0;
@@ -449,6 +459,69 @@ test("empty and non-string input yield null", () => {
   for (const input of ["", "   ", "\n\n", null, undefined, 42, {}]) {
     assert.equal(cleanTitle(input), null, `should refuse ${JSON.stringify(input)}`);
   }
+});
+
+// --- Cloud sessions --------------------------------------------------------
+//
+// The session id arrives from the phone and is handed to the CLI as an
+// argument, so the parser is a security boundary, not a convenience. Anything
+// that is not plainly an id has to be refused before it can be read as a flag.
+
+test("accepts a bare cloud session id", () => {
+  assert.equal(
+    parseCloudSessionId("session_01DiUkqY2kzbUbDmW1w96rfi"),
+    "session_01DiUkqY2kzbUbDmW1w96rfi"
+  );
+  assert.equal(parseCloudSessionId("cse_01abcdef2345"), "cse_01abcdef2345");
+  assert.equal(parseCloudSessionId("  session_01abcdef2345  "), "session_01abcdef2345");
+});
+
+test("pulls the id out of a claude.ai/code URL", () => {
+  for (const url of [
+    "https://claude.ai/code/session_01DiUkqY2kzbUbDmW1w96rfi",
+    "https://claude.ai/code/session_01DiUkqY2kzbUbDmW1w96rfi?from=cli&m=0",
+    "claude.ai/code/session_01DiUkqY2kzbUbDmW1w96rfi",
+  ]) {
+    assert.equal(parseCloudSessionId(url), "session_01DiUkqY2kzbUbDmW1w96rfi", `failed on ${url}`);
+  }
+});
+
+test("refuses anything that could be read as a flag", () => {
+  // The whole point: these would otherwise reach the CLI as arguments.
+  for (const attempt of [
+    "--dangerously-skip-permissions",
+    "-p",
+    "--cloud",
+    "session_01 --resume other",
+    "; rm -rf /",
+    "../../etc/passwd",
+    "session/01",
+  ]) {
+    assert.equal(parseCloudSessionId(attempt), null, `should refuse ${attempt}`);
+  }
+});
+
+test("refuses empty, short, and non-string input", () => {
+  for (const attempt of ["", "   ", "abc", null, undefined, 42, {}, []]) {
+    assert.equal(parseCloudSessionId(attempt), null, `should refuse ${JSON.stringify(attempt)}`);
+  }
+});
+
+test("builds the documented cloud and teleport commands", () => {
+  // Order matters: the message is the value of -p, and --output-format json is
+  // what makes the result parseable rather than prose.
+  assert.deepEqual(
+    cloudSendArgs("session_01abcdef2345", "run the tests"),
+    ["-p", "run the tests", "--cloud", "session_01abcdef2345", "--output-format", "json"]
+  );
+  assert.deepEqual(teleportArgs("session_01abcdef2345"), ["--teleport", "session_01abcdef2345"]);
+});
+
+test("a message that looks like a flag is still a message", () => {
+  // It sits after -p as its value, so it is never parsed as an option.
+  const args = cloudSendArgs("session_01abcdef2345", "--help");
+  assert.equal(args[0], "-p");
+  assert.equal(args[1], "--help");
 });
 
 // --- The PowerShell scripts ------------------------------------------------

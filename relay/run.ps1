@@ -72,6 +72,10 @@ if (-not $token) {
 # value that only exists in the registry - saved by setup.ps1, or by the prompt
 # above - is not in $env: and node never sees it.
 $env:RELAY_TOKEN = $token
+# Tells the relay a supervisor exists, so the app's update button is allowed to
+# exit for a restart. Without it the relay updates but keeps running the old
+# code, which is the honest outcome when nothing would bring it back.
+$env:RELAY_SUPERVISED = "1"
 foreach ($name in @("RELAY_REPO", "RELAY_PORT", "RELAY_MODEL", "RELAY_PROJECTS", "RELAY_SCRATCH")) {
     $value = Resolve-Setting $name
     if ($value) { Set-Item -Path "env:$name" -Value $value }
