@@ -684,7 +684,7 @@ function firstLine(text) {
 const server = createServer((req, res) => {
   if (req.method === "GET" && req.url === "/health") {
     res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify({ ok: true, repo: REPO, version: version() }));
+    res.end(JSON.stringify({ ok: true, repo: REPO, version: version(), supervised: SUPERVISED }));
     return;
   }
 
@@ -865,6 +865,16 @@ if (isEntryPoint()) {
     console.log(`  permissions: ${PERMISSION_MODE}${ALLOWED_TOOLS ? ` + ${ALLOWED_TOOLS}` : ""}`);
     console.log(`  model:       ${MODEL || "(Claude Code default)"}`);
     console.log(`  version:     ${version() ?? "(not a git checkout)"}`);
+    // Said at startup rather than discovered when an update fails. There is no
+    // way to tell from the outside how the relay was launched, and the answer
+    // decides whether the app's update button can restart it.
+    console.log(
+      `  updates:     ${
+        SUPERVISED
+          ? "will restart (started by run.ps1)"
+          : "will NOT restart - start with .\\relay\\run.ps1 for that"
+      }`
+    );
 
     // Pairing link. Typing a 64-character token into a phone is the worst part
     // of setting this up, and it is what makes a short guessable token
