@@ -811,6 +811,59 @@ function teleportArgs(sessionId) {
 
 const TITLES_PATH = join(homedir(), ".pocketclaude", "titles.json");
 
+// Live sessions.
+//
+// `claude agents --json` lists the sessions currently running on this machine,
+// which includes everything the Remote Control server is serving to claude.ai
+// and the Claude app. Marking those rows lets the phone say "this one is live
+// on claude.ai right now" - the difference between resuming a transcript and
+// walking into a running conversation.
+
+/**
+ * Session ids from `claude agents --json` output.
+ *
+ * The schema is not documented, so this reads defensively: any string field
+ * named like a session id, on any entry, in an array found at the top level or
+ * one level down. Over-matching costs a wrong "live" dot; throwing costs the
+ * whole session list.
+ */
+function parseLiveIds(raw) {
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return new Set();
+  }
+  const entries = Array.isArray(parsed)
+    ? parsed
+    : Object.values(parsed ?? {}).find(Array.isArray) ?? [];
+  const ids = new Set();
+  for (const entry of entries) {
+    if (!entry || typeof entry !== "object") continue;
+    for (const key of ["sessionId", "session_id", "id"]) {
+      if (typeof entry[key] === "string" && entry[key]) {
+        ids.add(entry[key]);
+        break;
+      }
+    }
+  }
+  return ids;
+}
+
+function liveSessionIds() {
+  try {
+    const out = execFileSync(CLAUDE_BIN, ["agents", "--json"], {
+      encoding: "utf8",
+      timeout: 10_000,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return parseLiveIds(out);
+  } catch {
+    // Older CLI, or none running. Either way: nothing is live.
+    return new Set();
+  }
+}
+
 // Archived sessions.
 //
 // Claude Code has no archive of its own - a session is a transcript file that
@@ -1211,6 +1264,8 @@ const server = createServer((req, res) => {
   if (req.method === "GET" && req.url === "/sessions") {
     try {
       const sessions = listSessions();
+      const live = liveSessionIds();
+      for (const session of sessions) session.live = live.has(session.id);
       res.writeHead(200, { "content-type": "application/json" });
       // firstMessage is only here to feed the namer; sending a phone 60 copies
       // of a 500-character question to render 60 one-line rows is waste.
@@ -1299,6 +1354,7 @@ export {
   cleanTitle,
   resolveSessionCwd,
   sessionFilePath,
+  parseLiveIds,
   extractSessionURL,
   parseCloudSessionId,
   cloudSendArgs,

@@ -496,9 +496,19 @@ struct DashboardView: View {
                 .background(Color.pcIconWell, in: RoundedRectangle(cornerRadius: 9))
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(session.title)
-                    .font(.body)
-                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    if session.isLive {
+                        // Live under Remote Control - the same conversation is
+                        // open on claude.ai or in the Claude app right now.
+                        Circle()
+                            .fill(.green)
+                            .frame(width: 8, height: 8)
+                            .accessibilityLabel("Live on claude.ai")
+                    }
+                    Text(session.title)
+                        .font(.body)
+                        .lineLimit(1)
+                }
                 Text(session.projectPath)
                     .font(.caption)
                     .foregroundStyle(.secondary)

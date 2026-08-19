@@ -12,6 +12,10 @@ struct RelaySession: Identifiable, Equatable, Sendable {
     let project: String
     let projectPath: String
     let updatedAt: Date
+    /// Running right now — usually being served to claude.ai by Remote
+    /// Control. Resuming one is walking into a live conversation, not
+    /// reopening a transcript.
+    let isLive: Bool
 
     /// Sessions in an empty scratch directory aren't about code.
     var isChat: Bool { project.lowercased() == "chat" || projectPath.hasSuffix("pocketclaude-chat") }
@@ -75,7 +79,8 @@ extension RelayClient {
                 // Fractional seconds are present in practice, but a relay on a
                 // different platform may drop them; falling back beats showing
                 // every session as 1970.
-                updatedAt: formatter.date(from: stamp) ?? plain.date(from: stamp) ?? .distantPast
+                updatedAt: formatter.date(from: stamp) ?? plain.date(from: stamp) ?? .distantPast,
+                isLive: entry["live"]?.boolValue ?? false
             )
         }
     }

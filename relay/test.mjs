@@ -22,6 +22,7 @@ import {
   cleanTitle,
   resolveSessionCwd,
   sessionFilePath,
+  parseLiveIds,
   extractSessionURL,
   parseCloudSessionId,
   cloudSendArgs,
@@ -600,6 +601,23 @@ test("a traversal attempt never resolves to a file", () => {
 
 test("an unknown id resolves to nothing rather than a guess", () => {
   assert.equal(sessionFilePath("00000000-0000-0000-0000-000000000000"), null);
+});
+
+// --- Live sessions ---------------------------------------------------------
+//
+// `claude agents --json` has no documented schema, so the parser reads
+// defensively. Over-matching costs a wrong "live" dot; throwing would cost the
+// whole session list.
+
+test("live ids are found across plausible schemas", () => {
+  assert.deepEqual([...parseLiveIds('[{"sessionId":"a"},{"id":"b"}]')], ["a", "b"]);
+  assert.deepEqual([...parseLiveIds('{"agents":[{"session_id":"c"}]}')], ["c"]);
+});
+
+test("garbage output means nothing is live, not a crash", () => {
+  for (const raw of ["", "not json", "42", "null", "{}", '[{"name":"x"}]']) {
+    assert.equal(parseLiveIds(raw).size, 0, `failed on ${JSON.stringify(raw)}`);
+  }
 });
 
 // --- Remote Control --------------------------------------------------------
