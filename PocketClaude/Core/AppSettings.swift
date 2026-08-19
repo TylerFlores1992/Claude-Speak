@@ -1,5 +1,6 @@
-import Foundation
+import AVFoundation
 import Combine
+import Foundation
 
 /// Non-secret user preferences. Secrets never come near this type — they live in
 /// `KeychainStore` and are read on demand.
@@ -178,6 +179,14 @@ final class AppSettings: ObservableObject {
         didSet { defaults.set(lastCloudSessionLink, forKey: Keys.lastCloudSessionLink) }
     }
 
+    /// Leave music and podcasts playing, turned down, instead of stopping them.
+    @Published var keepOtherAudioPlaying: Bool {
+        didSet {
+            defaults.set(keepOtherAudioPlaying, forKey: Keys.keepOtherAudioPlaying)
+            AudioSessionController.keepsOtherAudioPlaying = keepOtherAudioPlaying
+        }
+    }
+
     /// Speak the confirmation prompt for write actions out loud.
     @Published var speakConfirmations: Bool {
         didSet { defaults.set(speakConfirmations, forKey: Keys.speakConfirmations) }
@@ -207,6 +216,7 @@ final class AppSettings: ObservableObject {
         static let wakeWordEnabled = "settings.wakeWordEnabled"
         static let wakePhrase = "settings.wakePhrase"
         static let lastCloudSessionLink = "settings.lastCloudSessionLink"
+        static let keepOtherAudioPlaying = "settings.keepOtherAudioPlaying"
     }
 
     init(defaults: UserDefaults = .standard) {
@@ -242,6 +252,10 @@ final class AppSettings: ObservableObject {
         // a one-word phrase fires on the radio.
         self.wakePhrase = defaults.string(forKey: Keys.wakePhrase) ?? "hey claude"
         self.lastCloudSessionLink = defaults.string(forKey: Keys.lastCloudSessionLink) ?? ""
+        self.keepOtherAudioPlaying = defaults.bool(forKey: Keys.keepOtherAudioPlaying)
+        // The session controller is a namespace, not an object, so it has to be
+        // told at launch rather than reading settings itself.
+        AudioSessionController.keepsOtherAudioPlaying = self.keepOtherAudioPlaying
     }
 
     /// Split `owner/repo` into its parts. Returns nil when unset or malformed.

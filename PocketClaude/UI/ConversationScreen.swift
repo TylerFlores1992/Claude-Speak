@@ -70,6 +70,9 @@ struct ConversationScreen: View {
         .onChange(of: settings.stemPressControl) { _, _ in
             viewModel.applyStemPressSetting()
         }
+        .onChange(of: settings.keepOtherAudioPlaying) { _, _ in
+            viewModel.applyStemPressSetting()
+        }
         .onChange(of: settings.wakeWordEnabled) { _, enabled in
             if enabled { viewModel.startWakeWord() } else { viewModel.stopWakeWord() }
         }

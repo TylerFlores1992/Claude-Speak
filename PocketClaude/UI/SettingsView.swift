@@ -315,13 +315,15 @@ struct SettingsView: View {
                 Slider(value: $settings.speechRate, in: 0.40...0.70)
             }
 
+            Toggle("Keep music playing", isOn: $settings.keepOtherAudioPlaying)
+
             Toggle("Speak while the answer arrives", isOn: $settings.speakIncrementally)
 
             Toggle("Speak write confirmations", isOn: $settings.speakConfirmations)
         } header: {
             Text("Voice out")
         } footer: {
-            Text("iOS ships only Default-quality voices, which sound robotic. Download better ones in iOS Settings → Accessibility → Spoken Content → Voices → English — the Premium voices are a large improvement and cost nothing. They appear in the list above once downloaded. ElevenLabs sounds better still and costs money per character; if a request fails, the app falls back to a system voice rather than going silent.")
+            Text("Keep music playing dips Spotify or a podcast while an answer is read and lets it back up afterwards, instead of stopping it. The cost is the AirPod stem press: an app that mixes with other audio can never hold the Now Playing slot, and that slot is the only channel a squeeze travels down. Music or the squeeze, not both. iOS ships only Default-quality voices, which sound robotic. Download better ones in iOS Settings → Accessibility → Spoken Content → Voices → English — the Premium voices are a large improvement and cost nothing. They appear in the list above once downloaded. ElevenLabs sounds better still and costs money per character; if a request fails, the app falls back to a system voice rather than going silent.")
         }
     }
 

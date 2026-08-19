@@ -105,6 +105,13 @@ final class ConversationViewModel: ObservableObject {
     /// Wires (or unwires) media transport commands to the talk button. See
     /// RemoteCommandController for what iOS does and does not allow here.
     func applyStemPressSetting() {
+        // Mixing with other audio and holding the Now Playing slot are the same
+        // trade in two directions: a mixing app never gets the slot, and the
+        // slot is the only channel a stem press travels down. Turning music on
+        // turns the squeeze off rather than leaving a toggle that does nothing.
+        if settings.keepOtherAudioPlaying && settings.stemPressControl {
+            settings.stemPressControl = false
+        }
         guard settings.stemPressControl else {
             remoteCommands.disable()
             nowPlaying.stop()

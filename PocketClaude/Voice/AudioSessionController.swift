@@ -14,6 +14,15 @@ import AVFoundation
 /// the whole time: `.playAndRecord` on a Bluetooth headset forces the low-quality
 /// HFP path, so every spoken answer would sound like a phone call.
 enum AudioSessionController {
+    /// Whether to leave other audio playing, turned down, rather than stopping
+    /// it. Set once from settings; read here so the two session calls cannot
+    /// disagree about which mode the app is in.
+    ///
+    /// Off by default because it is not free: an app that mixes with others can
+    /// never hold the Now Playing slot, and that slot is the only channel an
+    /// AirPod stem press travels down. You get music or you get the stem press.
+    nonisolated(unsafe) static var keepsOtherAudioPlaying = false
+
     static func configureForRecording() throws {
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(
@@ -33,7 +42,15 @@ enum AudioSessionController {
             // Nothing needs either option: the Now Playing loop already holds
             // the route, so there is nothing to duck, and the whole point is to
             // stay on the headset rather than fall back to the speaker.
-            options: [.allowBluetooth]
+            // `.duckOthers` is added only when asked for. It means mixing, and
+            // mixing is a second negotiation over the same route at exactly the
+            // moment the microphone is being acquired - which is what made
+            // starting the engine fail with CoreAudio's generic error on a
+            // locked screen. Worth it when the alternative is Spotify stopping
+            // dead, not worth it by default.
+            options: keepsOtherAudioPlaying
+                ? [.allowBluetooth, .duckOthers]
+                : [.allowBluetooth]
         )
         try session.setActive(true, options: [])
     }
@@ -42,12 +59,26 @@ enum AudioSessionController {
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(
             .playback,
-            // `.spokenAudio` tells iOS this is speech, so it pauses rather than
-            // ducks other audio and behaves well with CarPlay.
-            mode: .spokenAudio,
+            // The mode is the thing that decides duck-versus-pause, and the
+            // option alone does not override it. `.spokenAudio` is tuned for
+            // podcast-length speech and makes other audio *pause*, which is why
+            // Spotify stopped rather than dipping even with `.duckOthers` set.
+            // `.voicePrompt` is the mode for short spoken interjections over
+            // someone else's audio - a navigation instruction - which is
+            // exactly what an answer in your ear is.
+            mode: keepsOtherAudioPlaying ? .voicePrompt : .spokenAudio,
             options: [.allowBluetoothA2DP, .duckOthers]
         )
         try session.setActive(true, options: [])
+    }
+
+    /// Let the other app back up to full volume once an answer has finished.
+    ///
+    /// Only when mixing: deactivating otherwise hands away the Now Playing slot
+    /// the silent loop is holding, which is the thing a stem press needs.
+    static func releaseAfterSpeaking() {
+        guard keepsOtherAudioPlaying else { return }
+        deactivate()
     }
 
     /// For holding the Now Playing slot with `NowPlayingKeeper`.
