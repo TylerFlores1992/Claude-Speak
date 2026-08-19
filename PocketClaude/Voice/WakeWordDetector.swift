@@ -25,9 +25,15 @@ struct WakeWordDetector {
               let after = normalized.lastRangeEnd(of: needle)
         else { return nil }
 
+        // Drop whatever separated the phrase from the question. The mapped
+        // index lands *on* that separator, not past it, so "Hey Claude, what
+        // time is it" would otherwise be answered as ", what time is it" - and
+        // "Pocket Claude - what time is it" as "- what time is it". Skipping to
+        // the first letter or digit covers every separator the recogniser
+        // invents without listing them.
         let question = String(transcript[after...])
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return question
+            .drop { !$0.isLetter && !$0.isNumber }
+        return String(question).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// True when the pending question ends with the end keyword, which is the
