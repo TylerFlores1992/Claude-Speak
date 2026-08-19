@@ -30,6 +30,9 @@ struct DashboardView: View {
     @State private var isSendingToCloud = false
     @State private var queuedSessionURL: URL?
     @State private var sendProblem: String?
+    @State private var cloudSessions: [CloudSession] = []
+    @State private var isRefreshingCloud = false
+    @State private var refreshSummary: String?
 
     private var grouped: [(project: String, sessions: [RelaySession])] {
         let matching = sessions.filter { session in
@@ -69,6 +72,7 @@ struct DashboardView: View {
                         cloudSessionLink = viewModel.settings.lastCloudSessionLink
                     }
                 }
+                .task { await loadCloudSessions() }
         }
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
@@ -136,6 +140,43 @@ struct DashboardView: View {
                     Text("The conversation and its branch come across, and it becomes an ordinary session in the list above — answered out loud like any other. The cloud environment — its variables, setup script, and network rules — does not come with it; work continues in the relay machine's own environment.")
                 }
 
+                if !cloudSessions.isEmpty {
+                    Section {
+                        ForEach(cloudSessions) { session in
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(session.displayTitle).lineLimit(1)
+                                if let project = session.project {
+                                    Text(project)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+
+                        Button {
+                            Task { await refreshCloud() }
+                        } label: {
+                            HStack {
+                                Label("Update all from the cloud", systemImage: "arrow.clockwise")
+                                Spacer()
+                                if isRefreshingCloud { ProgressView().controlSize(.small) }
+                            }
+                        }
+                        .disabled(isRefreshingCloud)
+
+                        if let refreshSummary {
+                            Text(refreshSummary)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                    } header: {
+                        Text("Brought here before")
+                    } footer: {
+                        // Both limits stated, because both are surprising.
+                        Text("Nothing can list your cloud sessions, so these are the ones you have pulled down before — pulling a new one adds it here. Updating re-pulls each of them, which needs a clean checkout of its repository; anything with uncommitted work is reported and skipped rather than stopping the rest.")
+                    }
+                }
+
                 Section {
                     TextField("Ask it to do something…", text: $cloudMessage, axis: .vertical)
                         .lineLimit(1...5)
@@ -184,6 +225,35 @@ struct DashboardView: View {
         }
     }
 
+    private func loadCloudSessions() async {
+        cloudSessions = (try? await viewModel.cloudSessions()) ?? []
+    }
+
+    private func refreshCloud() async {
+        refreshSummary = nil
+        isRefreshingCloud = true
+        defer { isRefreshingCloud = false }
+        do {
+            let results = try await viewModel.refreshCloudSessions()
+            let updated = results.filter(\.ok).count
+            let failed = results.filter { !$0.ok }
+            // Names the first failure rather than only counting it: "1 couldn't
+            // update" with no reason is the report that sends you to a log.
+            if failed.isEmpty {
+                refreshSummary = "Updated \(updated) of \(results.count)."
+            } else {
+                let reason = failed.first?.problem ?? "unknown reason"
+                refreshSummary = "Updated \(updated) of \(results.count). "
+                    + "\(failed.count) couldn't: \(reason)"
+            }
+            await loadCloudSessions()
+            await load()
+        } catch {
+            refreshSummary = (error as? LocalizedError)?.errorDescription
+                ?? error.localizedDescription
+        }
+    }
+
     private var hasCloudLink: Bool {
         !cloudSessionLink.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
@@ -220,6 +290,7 @@ struct DashboardView: View {
             viewModel.settings.lastCloudSessionLink = cloudSessionLink
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             cloudSessionLink = ""
+            await loadCloudSessions()
             isBringingCloudSession = false
             // It is a local session now, so the ordinary list is where it shows.
             await load()

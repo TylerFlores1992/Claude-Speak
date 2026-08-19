@@ -17,6 +17,33 @@ struct RelaySession: Identifiable, Equatable, Sendable {
     var isChat: Bool { project.lowercased() == "chat" || projectPath.hasSuffix("pocketclaude-chat") }
 }
 
+/// A cloud session that has been brought onto the relay machine before.
+///
+/// Remembered because nothing can list cloud sessions: `claude agents --json`
+/// covers local background sessions only, and the teleport picker is
+/// interactive. Remembering the ones you have pulled is what turns "paste every
+/// link again" into one button.
+struct CloudSession: Identifiable, Equatable, Sendable {
+    let cloudID: String
+    let localID: String?
+    let title: String?
+    let project: String?
+    let updatedAt: Date?
+
+    var id: String { cloudID }
+    var displayTitle: String { title ?? cloudID }
+}
+
+/// The outcome of refreshing one remembered session.
+struct CloudRefreshResult: Identifiable, Equatable, Sendable {
+    let cloudID: String
+    let ok: Bool
+    let title: String?
+    let problem: String?
+
+    var id: String { cloudID }
+}
+
 /// Somewhere a new session can run.
 struct RelayProject: Identifiable, Equatable, Sendable {
     let name: String
@@ -124,6 +151,48 @@ extension RelayClient {
         var body: [String: JSONValue] = ["sessionId": .string(sessionID)]
         if !project.isEmpty { body["project"] = .string(project) }
         _ = try await post(path: "teleport", body: body, timeout: 200)
+    }
+
+    /// Cloud sessions this relay has pulled down before.
+    func cloudSessions() async throws -> [CloudSession] {
+        let json = try await getJSON(path: "cloud")
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let plain = ISO8601DateFormatter()
+
+        return (json["sessions"]?.arrayValue ?? []).compactMap { entry in
+            guard let cloudID = entry["cloudId"]?.stringValue else { return nil }
+            let stamp = entry["updatedAt"]?.stringValue ?? ""
+            return CloudSession(
+                cloudID: cloudID,
+                localID: entry["localId"]?.stringValue,
+                title: entry["title"]?.stringValue,
+                project: entry["project"]?.stringValue,
+                updatedAt: formatter.date(from: stamp) ?? plain.date(from: stamp)
+            )
+        }
+    }
+
+    /// Re-pulls remembered cloud sessions, or one of them.
+    ///
+    /// Returns a result per session rather than throwing on the first failure:
+    /// teleport needs a clean checkout, so one repository with uncommitted work
+    /// must not hide the others that refreshed fine.
+    func refreshCloudSessions(sessionID: String? = nil) async throws -> [CloudRefreshResult] {
+        var body: [String: JSONValue] = [:]
+        if let sessionID, !sessionID.isEmpty { body["sessionId"] = .string(sessionID) }
+        // Long: each session is a teleport, and a teleport fetches a branch.
+        let json = try await post(path: "cloud/refresh", body: body, timeout: 400)
+
+        return (json["results"]?.arrayValue ?? []).compactMap { entry in
+            guard let cloudID = entry["cloudId"]?.stringValue else { return nil }
+            return CloudRefreshResult(
+                cloudID: cloudID,
+                ok: entry["ok"]?.boolValue ?? false,
+                title: entry["title"]?.stringValue,
+                problem: entry["error"]?.stringValue
+            )
+        }
     }
 
     /// Queues a message into a cloud session.

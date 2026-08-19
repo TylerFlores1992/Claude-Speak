@@ -474,6 +474,23 @@ final class ConversationViewModel: ObservableObject {
         try await client.teleport(sessionID: link, project: project)
     }
 
+    /// Cloud sessions the relay has pulled down before.
+    func cloudSessions() async throws -> [CloudSession] {
+        guard let client = RelayClient.make(settings: settings) else {
+            throw RelayError.notConfigured
+        }
+        return try await client.cloudSessions()
+    }
+
+    /// Re-pulls remembered cloud sessions so their local copies match the
+    /// cloud again. One click for all of them, or one named session.
+    func refreshCloudSessions(sessionID: String? = nil) async throws -> [CloudRefreshResult] {
+        guard let client = RelayClient.make(settings: settings) else {
+            throw RelayError.notConfigured
+        }
+        return try await client.refreshCloudSessions(sessionID: sessionID)
+    }
+
     /// Queues a message into a cloud session without bringing it here.
     ///
     /// Returns the session's URL, and no answer, because the CLI returns no
