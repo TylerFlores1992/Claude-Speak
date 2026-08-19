@@ -10,6 +10,11 @@ struct ConversationScreen: View {
     @Environment(\.scenePhase) private var scenePhase
 
     @State private var typedInput = ""
+    /// Whether the composer field holds the keyboard. Needed because SwiftUI
+    /// gives no other way to put it away: tapping outside a TextField inside a
+    /// scrolling stack does not dismiss it, so without this the keyboard covers
+    /// the transcript with no way back.
+    @FocusState private var isComposerFocused: Bool
     @State private var isShowingSessions = false
 
     var body: some View {
@@ -181,11 +186,24 @@ struct ConversationScreen: View {
                 .textFieldStyle(.plain)
                 .lineLimit(1...5)
                 .font(.body)
+                .focused($isComposerFocused)
                 .submitLabel(.send)
                 .onSubmit(sendTyped)
 
             HStack(spacing: 8) {
                 actionsMenu
+
+                if isComposerFocused {
+                    Button { isComposerFocused = false } label: {
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 15, weight: .semibold))
+                            .frame(width: 34, height: 34)
+                            .background(Color.pcIconWell, in: Circle())
+                            .foregroundStyle(.primary)
+                    }
+                    .accessibilityLabel("Hide the keyboard")
+                    .transition(.scale.combined(with: .opacity))
+                }
 
                 ChipMenu(title: modelChipTitle, systemImage: "sparkle") {
                     Picker("Model", selection: $settings.model) {
@@ -240,6 +258,7 @@ struct ConversationScreen: View {
         )
         .padding(.horizontal, 12)
         .padding(.bottom, 8)
+        .animation(.easeInOut(duration: 0.15), value: isComposerFocused)
     }
 
     /// Names the workspace, so it is clear which checkout a question lands in
@@ -268,6 +287,9 @@ struct ConversationScreen: View {
         guard !text.isEmpty else { return }
         viewModel.sendTyped(text)
         typedInput = ""
+        // Put the keyboard away on send. Leaving it up hides the answer that
+        // was just asked for.
+        isComposerFocused = false
     }
 
     /// The things you reach for occasionally. In a menu rather than the toolbar
