@@ -202,3 +202,26 @@ can glance at progress without unlocking.
   value here.
 - **On-device models.** Nothing that fits on a phone gets close to being useful
   on a codebase you can't see.
+
+---
+
+# Current roadmap
+
+`STATUS.md` has the live picture. In short:
+
+**Next, in order of what unblocks the most:**
+
+1. Run `claude remote-control` on the relay machine. It decides whether the
+   session-merging direction is available at all, and nothing further should be
+   built on it until that is known.
+2. Test `Bring it here` against a real claude.ai session link — the first actual
+   exercise of `/teleport`.
+3. Scaffold repo-committed configuration for the target repository: a
+   `.claude/settings.json` SessionStart hook plus a setup script, so environment
+   setup travels with the checkout into both cloud sessions and relay sessions.
+   This is the supported substitute for editing cloud environments, which has no
+   API.
+
+**Ruled out, with reasons, in `STATUS.md`:** listing cloud sessions, attaching
+to a live cloud session, the AirPod stem press while locked, foregrounding the
+phone app from the watch, and editing cloud environments programmatically.
