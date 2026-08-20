@@ -13,7 +13,19 @@
 
 param(
     # Start the relay straight away as well, rather than waiting for a logon.
-    [switch]$Now
+    [switch]$Now,
+
+    # Trigger at boot instead of at logon, so the relay comes back after a
+    # restart without anyone signing in. Windows has to store your password to
+    # do this, because the task still runs as you -- the Claude Code CLI is
+    # authenticated per user, so a task running as SYSTEM would start a relay
+    # that cannot log in to anything.
+    #
+    # The password goes into the LSA secret store, which is the same place
+    # Windows keeps every other saved task credential. Reasonable on a machine
+    # you own and sits in your house; think about it before using it on a
+    # laptop that travels.
+    [switch]$AtBoot
 )
 
 $ErrorActionPreference = "Stop"
@@ -63,21 +75,56 @@ if (-not $admin) {
     # the app's update button into a restart, and what supplies the token.
     $action = New-ScheduledTaskAction -Execute "powershell.exe" `
         -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$runScript`""
-    $trigger = New-ScheduledTaskTrigger -AtLogOn
+    $trigger = if ($AtBoot) {
+        New-ScheduledTaskTrigger -AtStartup
+    } else {
+        New-ScheduledTaskTrigger -AtLogOn
+    }
     # Restart if it dies, and never stop it for running too long -- the default
     # task settings kill a task after three days, which is not a useful
     # lifetime for something meant to always be up.
     $settings = New-ScheduledTaskSettingsSet -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) `
         -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 
-    if ($existing) {
-        Set-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings | Out-Null
-        Ok "updated the existing '$taskName' task"
-    } else {
-        Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings | Out-Null
-        Ok "registered '$taskName' -- it will start when you log in"
+    # -AtBoot needs the password so Windows can run the task with nobody signed
+    # in. Read as a SecureString and handed straight to Register-ScheduledTask,
+    # which is the only thing that sees it.
+    $register = @{
+        TaskName = $taskName
+        Action   = $action
+        Trigger  = $trigger
+        Settings = $settings
     }
-    Warn "It starts at *logon*, not at boot. If this machine reboots and sits at the lock screen, nothing starts until you sign in. Turn on automatic sign-in if you want it up without you."
+    if ($AtBoot) {
+        $user = "$env:USERDOMAIN\$env:USERNAME"
+        Write-Host ""
+        Write-Host "Starting at boot means running with nobody signed in, so Windows needs" -ForegroundColor Yellow
+        Write-Host "your password for $user. It is stored by Windows, not by this script." -ForegroundColor Yellow
+        $secure = Read-Host "Windows password for $user" -AsSecureString
+        $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+        try {
+            $register.User = $user
+            $register.Password = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+            $register.RunLevel = "Highest"
+        } finally {
+            [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+        }
+    }
+
+    # Unregister rather than Set: a trigger change from logon to boot also
+    # changes the principal, and Set-ScheduledTask cannot alter that.
+    if ($existing) {
+        Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
+    }
+    Register-ScheduledTask @register | Out-Null
+
+    if ($AtBoot) {
+        Ok "registered '$taskName' -- it will start at boot, with nobody signed in"
+    } else {
+        Ok "registered '$taskName' -- it will start when you log in"
+        Warn "It starts at *logon*, not at boot. If this machine reboots and sits at the lock screen, nothing starts until you sign in."
+        Warn "Re-run with -AtBoot to have it start without anyone signing in."
+    }
 }
 
 # --- Shortcut --------------------------------------------------------------
