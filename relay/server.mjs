@@ -35,6 +35,13 @@ const TITLES_PER_REFRESH = Number(process.env.RELAY_TITLES_PER_REFRESH ?? 5);
 // something is watching for the exit. Without this flag it exits into nothing
 // after an update and simply looks dead, which is exactly what happened.
 const SUPERVISED = process.env.RELAY_SUPERVISED === "1";
+// A second, narrower token, used only by the Stop hook running inside a cloud
+// session to hand an answer back. Kept separate from RELAY_TOKEN on purpose:
+// that one can run Claude Code on this machine, and it would have to be pasted
+// into a cloud environment variable, which the docs say is readable by anyone
+// using that environment and is not a secrets store. This one can do exactly
+// one thing - deliver an answer - so leaking it costs far less.
+const ANSWER_TOKEN = process.env.RELAY_ANSWER_TOKEN ?? "";
 const MODEL = process.env.RELAY_MODEL ?? "";
 const TIMEOUT_MS = Number(process.env.RELAY_TIMEOUT_MS ?? 300_000);
 
@@ -603,6 +610,113 @@ async function readJSON(req) {
 // Teleport is the one that gives a phone the whole loop, because after it runs
 // there is nothing special about the session any more.
 
+// Answers coming back from cloud sessions.
+//
+// This is the half of the loop that did not exist. Sending into a real
+// claude.ai session is easy - `claude -p "..." --cloud <id>` queues a message
+// and exits - but it exits without an answer, so nothing could be spoken into
+// an ear. A Stop hook committed to the repository runs inside the cloud session
+// when Claude finishes a turn, receives the final text as `last_assistant_message`,
+// and POSTs it here.
+//
+// The result is a loop that runs entirely in Anthropic's cloud, in the same
+// session visible in the Claude app, with this machine acting only as courier.
+
+/**
+ * One id shape for both ends.
+ *
+ * A cloud session is `session_01ABC` in a claude.ai URL and in the JSON that
+ * `--cloud` prints, but the session reads its own id from
+ * CLAUDE_CODE_REMOTE_SESSION_ID as `cse_01ABC`. Same session, two spellings;
+ * matching them literally would mean an answer never finds its question.
+ */
+function normalizeCloudId(id) {
+  if (typeof id !== "string") return "";
+  const trimmed = id.trim();
+  if (!trimmed) return "";
+  return trimmed.startsWith("cse_") ? `session_${trimmed.slice(4)}` : trimmed;
+}
+
+// Answers that arrived before anyone asked for them, and callers waiting for
+// one. A turn can finish before the asking request gets around to waiting, and
+// a hook can fire for a turn nobody here started.
+const answerInbox = new Map(); // id -> { text, at }
+const answerWaiters = new Map(); // id -> [resolve]
+const ANSWER_TTL_MS = 30 * 60 * 1000;
+
+/** Hands an answer to whoever is waiting, or holds it for whoever asks next. */
+function deliverAnswer(id, text) {
+  const key = normalizeCloudId(id);
+  if (!key || typeof text !== "string" || !text.trim()) return false;
+
+  const waiting = answerWaiters.get(key);
+  if (waiting?.length) {
+    answerWaiters.delete(key);
+    for (const resolve of waiting) resolve(text);
+    return true;
+  }
+
+  // Prune on write rather than on a timer, so an idle relay holds nothing and
+  // there is no interval to leak.
+  const cutoff = Date.now() - ANSWER_TTL_MS;
+  for (const [existing, entry] of answerInbox) {
+    if (entry.at < cutoff) answerInbox.delete(existing);
+  }
+  answerInbox.set(key, { text, at: Date.now() });
+  return false;
+}
+
+/** Resolves with the answer text, or null when nothing arrives in time. */
+function awaitAnswer(id, timeoutMs) {
+  const key = normalizeCloudId(id);
+  if (!key) return Promise.resolve(null);
+
+  const buffered = answerInbox.get(key);
+  if (buffered) {
+    answerInbox.delete(key);
+    return Promise.resolve(buffered.text);
+  }
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+
+    const list = answerWaiters.get(key) ?? [];
+    list.push(finish);
+    answerWaiters.set(key, list);
+
+    const timer = setTimeout(() => {
+      const current = answerWaiters.get(key);
+      if (current) {
+        const remaining = current.filter((fn) => fn !== finish);
+        if (remaining.length) answerWaiters.set(key, remaining);
+        else answerWaiters.delete(key);
+      }
+      finish(null);
+    }, timeoutMs);
+    // Do not hold the process open for a waiter.
+    timer.unref?.();
+  });
+}
+
+/** True when the request carries either the answer token or the main one. */
+function authorizedForAnswer(req) {
+  const header = req.headers.authorization ?? "";
+  const presented = header.startsWith("Bearer ") ? header.slice(7) : "";
+  if (!presented) return false;
+  for (const expected of [ANSWER_TOKEN, TOKEN]) {
+    if (!expected) continue;
+    const a = Buffer.from(presented);
+    const b = Buffer.from(expected);
+    if (a.length === b.length && timingSafeEqual(a, b)) return true;
+  }
+  return false;
+}
+
 // Remote Control.
 //
 // The closest thing to "two machines on one session". `claude -p`, which is how
@@ -1035,6 +1149,35 @@ const server = createServer((req, res) => {
     return;
   }
 
+  // Before the main auth gate: the Stop hook inside a cloud session carries the
+  // narrow answer token, not the one that can run Claude Code on this machine.
+  if (req.method === "POST" && req.url === "/cloud/answer") {
+    if (!ANSWER_TOKEN) {
+      respond(res, 503, {
+        error: "Set RELAY_ANSWER_TOKEN on the relay to accept answers from cloud sessions.",
+      });
+      return;
+    }
+    if (!authorizedForAnswer(req)) {
+      respond(res, 401, { error: "unauthorized" });
+      return;
+    }
+    readJSON(req)
+      .then((body) => {
+        const id = normalizeCloudId(body.sessionId);
+        const text = typeof body.text === "string" ? body.text : "";
+        if (!id) return respond(res, 400, { error: "sessionId is required" });
+        if (!text.trim()) return respond(res, 400, { error: "text is required" });
+        const claimed = deliverAnswer(id, text);
+        // `claimed` says whether anyone was waiting. Reported rather than
+        // hidden: during the first round-trip test it is the difference
+        // between "the hook works" and "the hook works and the phone heard it".
+        respond(res, 200, { ok: true, sessionId: id, claimed });
+      })
+      .catch((error) => respond(res, 400, { error: error.message }));
+    return;
+  }
+
   if (!authorized(req)) {
     res.writeHead(401, { "content-type": "application/json" });
     res.end(JSON.stringify({ error: "unauthorized" }));
@@ -1068,6 +1211,52 @@ const server = createServer((req, res) => {
         `Stop it and run:  .\\relay\\run.ps1\n`
       );
     }
+    return;
+  }
+
+  if (req.method === "POST" && req.url === "/cloud/ask") {
+    readJSON(req)
+      .then(async (body) => {
+        const sessionId = parseCloudSessionId(body.sessionId);
+        const text = typeof body.text === "string" ? body.text.trim() : "";
+        if (!sessionId) return respond(res, 400, { error: "That doesn't look like a cloud session id." });
+        if (!text) return respond(res, 400, { error: "Nothing to send." });
+        if (!ANSWER_TOKEN) {
+          return respond(res, 503, {
+            error: "Set RELAY_ANSWER_TOKEN and install the Stop hook, or an answer can never come back.",
+          });
+        }
+
+        // Start waiting before sending. A short turn can finish before the
+        // send call even returns, and a waiter registered afterwards would
+        // miss it -- the inbox covers that, but only because of this order
+        // being wrong is a race worth not having in the first place.
+        const waiting = awaitAnswer(sessionId, Number(body.timeoutMs) || 240_000);
+
+        try {
+          execFileSync(CLAUDE_BIN, cloudSendArgs(sessionId, text), {
+            encoding: "utf8",
+            timeout: 60_000,
+            stdio: ["ignore", "pipe", "pipe"],
+          });
+        } catch (error) {
+          return respond(res, 502, {
+            error: (error.stderr || error.message || "").split("\n").slice(-3).join(" ").trim(),
+          });
+        }
+
+        const answer = await waiting;
+        if (answer === null) {
+          return respond(res, 200, {
+            sessionId,
+            answer: null,
+            error:
+              "The message was delivered but no answer came back in time. Either the turn is still running, or the Stop hook is not installed in that repository.",
+          });
+        }
+        respond(res, 200, { sessionId, answer });
+      })
+      .catch((error) => respond(res, 400, { error: error.message }));
     return;
   }
 
@@ -1355,6 +1544,9 @@ export {
   resolveSessionCwd,
   sessionFilePath,
   parseLiveIds,
+  normalizeCloudId,
+  deliverAnswer,
+  awaitAnswer,
   extractSessionURL,
   parseCloudSessionId,
   cloudSendArgs,

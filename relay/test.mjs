@@ -229,6 +229,9 @@ async function readSSE(response) {
 const dir = mkdtempSync(join(tmpdir(), "pocketclaude-relay-"));
 const PORT = 8791;
 const TOKEN = "test-token-that-is-long-enough";
+// The narrow token the Stop hook carries. Separate from TOKEN on purpose: it
+// can deliver an answer and nothing else.
+const ANSWER_TOKEN = "answer-token-that-is-long-enough";
 const base = `http://127.0.0.1:${PORT}`;
 
 const happyPath = writeFakeClaude(dir, {
@@ -252,6 +255,7 @@ try {
     RELAY_TOKEN: TOKEN,
     RELAY_REPO: dir,
     RELAY_CLAUDE_BIN: happyPath,
+    RELAY_ANSWER_TOKEN: ANSWER_TOKEN,
   });
 
   await asyncTest("health check needs no auth", async () => {
@@ -308,6 +312,73 @@ try {
       body: JSON.stringify({ text: "   " }),
     });
     assert.equal(response.status, 400);
+  });
+
+  // --- The cloud round trip ------------------------------------------------
+  //
+  // The half of the loop that did not exist. `claude -p --cloud` queues a
+  // message into a real claude.ai session and exits without an answer; a Stop
+  // hook running inside that session posts the answer back here. These tests
+  // stand in for the cloud with the fake CLI and a direct POST, which is
+  // exactly what the hook does over the wire.
+
+  await asyncTest("an answer needs the answer token, not just any request", async () => {
+    const response = await fetch(`${base}/cloud/answer`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ sessionId: "session_01ABC", text: "hi" }),
+    });
+    assert.equal(response.status, 401);
+  });
+
+  await asyncTest("the narrow answer token is accepted", async () => {
+    const response = await fetch(`${base}/cloud/answer`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${ANSWER_TOKEN}` },
+      body: JSON.stringify({ sessionId: "session_01BUFFERED", text: "held for later" }),
+    });
+    assert.equal(response.status, 200);
+    // Nobody was waiting, so it was buffered rather than handed over.
+    assert.equal((await response.json()).claimed, false);
+  });
+
+  await asyncTest("a question is answered by the hook that fires after it", async () => {
+    // The whole loop: ask, the cloud session finishes a turn, its Stop hook
+    // posts the answer, the waiting request returns it.
+    const asking = fetch(`${base}/cloud/ask`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${TOKEN}` },
+      body: JSON.stringify({ sessionId: "session_01LOOP", text: "what time is it", timeoutMs: 5000 }),
+    });
+
+    // The hook reports the session as cse_, the phone asked as session_. The
+    // relay has to match them or an answer never finds its question.
+    let delivered = false;
+    for (let attempt = 0; attempt < 50 && !delivered; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const response = await fetch(`${base}/cloud/answer`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${ANSWER_TOKEN}` },
+        body: JSON.stringify({ sessionId: "cse_01LOOP", text: "It is 4:15 PM." }),
+      });
+      delivered = (await response.json()).claimed;
+    }
+    assert.ok(delivered, "the hook's answer was never claimed by the waiting request");
+
+    const result = await (await asking).json();
+    assert.equal(result.answer, "It is 4:15 PM.");
+    assert.equal(result.sessionId, "session_01LOOP");
+  });
+
+  await asyncTest("a turn that never answers says so rather than hanging", async () => {
+    const response = await fetch(`${base}/cloud/ask`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${TOKEN}` },
+      body: JSON.stringify({ sessionId: "session_01SILENT", text: "hello", timeoutMs: 300 }),
+    });
+    const result = await response.json();
+    assert.equal(result.answer, null);
+    assert.match(result.error, /Stop hook/);
   });
 } finally {
   server?.kill();

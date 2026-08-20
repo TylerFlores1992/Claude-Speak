@@ -143,6 +143,7 @@ a machine that was set up by hand.
 | `RELAY_AUTO_TITLE` | `1` | Set `0` to keep raw first questions as session titles. |
 | `RELAY_TITLES_PER_REFRESH` | `5` | How many unnamed sessions to name per `/sessions` call. |
 | `RELAY_SUPERVISED` | *(set by `run.ps1`)* | Tells the relay a supervisor exists, so an update may exit to restart. |
+| `RELAY_ANSWER_TOKEN` | *(none)* | Narrow token for `/cloud/answer` only. Without it, cloud answers are refused. See `hooks/README.md`. |
 
 ### Endpoints
 
@@ -158,6 +159,8 @@ Everything except `/health` requires `Authorization: Bearer $RELAY_TOKEN`.
 | `GET` | `/projects` | Workspaces a new session may run in. |
 | `POST` | `/teleport` | Pulls a claude.ai cloud session onto this machine. |
 | `POST` | `/cloud/send` | Queues a message into a cloud session. Returns without an answer. |
+| `POST` | `/cloud/ask` | Queues a message into a cloud session **and waits for the answer**, which arrives via the Stop hook. See `hooks/README.md`. |
+| `POST` | `/cloud/answer` | Where the Stop hook delivers a finished turn. Takes the narrow `RELAY_ANSWER_TOKEN`, and is the one route outside the main auth gate. |
 | `GET` | `/cloud` | Cloud sessions pulled here before. |
 | `POST` | `/cloud/refresh` | Re-pulls one or all of them. |
 | `GET`/`POST` | `/remote-control` | Reports or starts the Remote Control server. |
@@ -189,6 +192,12 @@ here can see them and no API lists them, so they are reached one at a time:
 - **`/cloud/send`** runs `claude -p "…" --cloud <id>`, which queues a message
   into the session where it already runs and exits. No answer comes back;
   read it in the Claude app.
+
+**`/cloud/ask`** does what `/cloud/send` does and then waits for the answer,
+which a Stop hook committed to the repository posts back to `/cloud/answer`
+from inside the cloud session. That closes a loop that runs entirely in
+Anthropic's cloud, in the session you can watch in the Claude app, with this
+machine acting only as courier. Setup is in [`hooks/README.md`](hooks/README.md).
 
 For one session visible in two places at once, `/remote-control` starts
 `claude remote-control`, a server that serves local sessions to claude.ai and
