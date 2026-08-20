@@ -100,6 +100,64 @@ invisible to `$env:` but is still found here.
 | `RELAY_ALLOWED_TOOLS` | *(none)* | Extra tools to permit, e.g. `"Bash(npm test *)"`. |
 | `RELAY_TIMEOUT_MS` | `300000` | Kills a run that hangs. |
 | `RELAY_CLAUDE_BIN` | `claude` | Path to the CLI if it isn't on `PATH`. |
+| `RELAY_PROJECTS` | *(none)* | Extra workspaces as `name=path` pairs, comma separated. |
+| `RELAY_SCRATCH` | `~/pocketclaude-chat` | The empty directory the Chat workspace uses. |
+| `RELAY_AUTO_TITLE` | `1` | Set `0` to keep raw first questions as session titles. |
+| `RELAY_TITLES_PER_REFRESH` | `5` | How many unnamed sessions to name per `/sessions` call. |
+| `RELAY_SUPERVISED` | *(set by `run.ps1`)* | Tells the relay a supervisor exists, so an update may exit to restart. |
+
+### Endpoints
+
+Everything except `/health` requires `Authorization: Bearer $RELAY_TOKEN`.
+
+| Method | Path | What it does |
+|---|---|---|
+| `GET` | `/health` | Liveness, repo, version, and whether updates can restart. |
+| `POST` | `/ask` | One question. Streams SSE: `session`, `chunk`, `tool`, `status`, `done`. Accepts `text`, `sessionId`, `project`, `model`, `effort`. |
+| `GET` | `/sessions` | Every Claude Code session on the machine, newest first, with a `live` flag. |
+| `POST` | `/sessions/archive` | Hides one from the list. The transcript stays. |
+| `POST` | `/sessions/delete` | Removes the transcript file. Not undoable. |
+| `GET` | `/projects` | Workspaces a new session may run in. |
+| `POST` | `/teleport` | Pulls a claude.ai cloud session onto this machine. |
+| `POST` | `/cloud/send` | Queues a message into a cloud session. Returns without an answer. |
+| `GET` | `/cloud` | Cloud sessions pulled here before. |
+| `POST` | `/cloud/refresh` | Re-pulls one or all of them. |
+| `GET`/`POST` | `/remote-control` | Reports or starts the Remote Control server. |
+| `POST` | `/remote-control/stop` | Stops it. |
+| `POST` | `/update` | `git pull` in the relay checkout, then restart if supervised. |
+
+### Session titles
+
+A session is otherwise titled with its first question verbatim, which is how a
+list becomes six rows of `What does this proje...`. The relay asks a small model
+for a few words the first time it sees a session and caches the answer in
+`~/.pocketclaude/titles.json`, keyed by session id — named once, never a second
+call. A title set by hand with `/rename` still wins.
+
+Naming happens after the response is sent and is capped per refresh, because
+each one spawns a process. It passes `--no-session-persistence`: without that,
+naming a session creates a session, and the titler pollutes the list it exists
+to tidy.
+
+### Cloud sessions and Remote Control
+
+Sessions in the Claude app's Code tab run on Anthropic's infrastructure. Nothing
+here can see them and no API lists them, so they are reached one at a time:
+
+- **`/teleport`** runs `claude --teleport <id>`, which pulls the session's
+  branch and full history onto this machine. It becomes an ordinary local
+  session that `/sessions` lists and `/ask` resumes. It is a **copy** — the
+  cloud session keeps running and the two diverge from that moment.
+- **`/cloud/send`** runs `claude -p "…" --cloud <id>`, which queues a message
+  into the session where it already runs and exits. No answer comes back;
+  read it in the Claude app.
+
+For one session visible in two places at once, `/remote-control` starts
+`claude remote-control`, a server that serves local sessions to claude.ai and
+the Claude app. Sessions it serves show a green dot in the phone's dashboard.
+
+Remote Control is a research preview and may report that it is not enabled for
+your account. Run `claude remote-control` by hand once to find out.
 
 ### Safety: why `dontAsk` is the default
 

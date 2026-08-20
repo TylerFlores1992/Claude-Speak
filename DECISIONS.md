@@ -349,3 +349,47 @@ There are no `// TODO(TYLER):` markers in the code. Both credentials are entered
 at runtime through Settings, so nothing was blocked on a secret only you can
 provide. What's *absent* is absent by design — see the honest-limits section of
 `PHASE1_RESEARCH.md` and the "what's next" section of `ROADMAP.md`.
+
+## Sessions are merged by making the relay the home, not by reaching into the cloud
+
+The Claude app's Code tab lists sessions running on Anthropic's infrastructure.
+The obvious goal was to show those in this app. Three routes were investigated
+and two are closed:
+
+- **Listing them** — no API, and no non-interactive CLI. `claude agents --json`
+  covers local sessions only.
+- **Attaching to one** — `claude --cloud <id>` does attach a terminal to a
+  running cloud session, but the docs state plainly that `--output-format
+  stream-json` is unsupported with it. The relay could attach and then have no
+  way to speak anything to the phone.
+- **`--teleport`** — works, and is what the cloud button uses, but it makes a
+  *copy*. The cloud session keeps running and the two diverge immediately.
+
+The direction that actually works is the inverse. `claude remote-control` is a
+server that serves *local* sessions to claude.ai and the Claude app. Run it on
+the relay machine and a session is simultaneously live on the phone, in a
+browser, and in the Claude app — one session, three surfaces — and it lands in
+`~/.claude/projects` like any other local session, so the dashboard lists it
+with nothing extra to build.
+
+So: stop trying to import their sessions, and export ours instead. The green dot
+on a dashboard row marks a session that is live under this arrangement, because
+resuming one is walking into a running conversation rather than reopening a
+transcript.
+
+The catch is honest and unresolved: Remote Control is a research preview behind
+a feature flag, and it has not yet been confirmed available on this account.
+
+## Archiving hides; deleting removes
+
+Claude Code has no archive — a session is a transcript file that exists or does
+not. Archive is therefore this relay keeping a list of hidden ids; the file
+stays and `claude --resume` still works at a keyboard. Delete unlinks the file
+and cannot be undone, so it is the swipe that confirms first, and full-swipe is
+disabled because iOS runs the first action on a full swipe and "flick left,
+session gone" is the wrong ergonomics beside a destructive button.
+
+The id comes from the phone and ends up naming a file to unlink, so it is
+resolved by matching against files that already exist under `~/.claude/projects`
+and refused if it is shaped like a path — the same rule as every other value
+this app sends that becomes an argument.
