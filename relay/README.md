@@ -99,11 +99,28 @@ task runs as you rather than as SYSTEM, deliberately: the relay shells out to
 the Claude Code CLI, which is authenticated per user, so a task running as
 SYSTEM would start a relay that cannot log in to anything.
 
-It triggers at **logon, not at boot**. A machine that reboots and sits at the
-lock screen starts nothing until someone signs in — turn on automatic sign-in
-if you want it up without you. The task is set to restart on failure and to
-have no execution time limit, because the default kills a task after three
-days, which is not a useful lifetime for something meant to always be up.
+By default it triggers at **logon**, so a machine that reboots and sits at the
+lock screen starts nothing until someone signs in. Pass `-AtBoot` to trigger at
+startup instead:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\relay\install-autostart.ps1 -AtBoot -Now
+```
+
+That runs with nobody signed in, which means Windows has to store your password
+— it goes into the LSA secret store, the same place every other saved task
+credential lives. The task still runs as **you**, not as SYSTEM, because the
+Claude Code CLI is authenticated per user. Reasonable on a machine you own that
+sits in your house; think about it before doing it on a laptop that travels.
+
+The task is set to restart on failure and to have no execution time limit,
+because the default kills a task after three days, which is not a useful
+lifetime for something meant to always be up.
+
+**There is no button in the app for this, and there cannot be.** The app
+reaches the relay over HTTP; if the relay is not running there is nothing
+listening to receive a request to start it. Any such button would need a second
+always-on process, which only moves the problem. Starting itself is the fix.
 
 `setup.ps1` does all of this too; this script is the same steps split out, for
 a machine that was set up by hand.
@@ -126,6 +143,7 @@ a machine that was set up by hand.
 | `RELAY_AUTO_TITLE` | `1` | Set `0` to keep raw first questions as session titles. |
 | `RELAY_TITLES_PER_REFRESH` | `5` | How many unnamed sessions to name per `/sessions` call. |
 | `RELAY_SUPERVISED` | *(set by `run.ps1`)* | Tells the relay a supervisor exists, so an update may exit to restart. |
+| `RELAY_ANSWER_TOKEN` | *(none)* | Narrow token for `/cloud/answer` only. Without it, cloud answers are refused. See `hooks/README.md`. |
 
 ### Endpoints
 
@@ -141,6 +159,8 @@ Everything except `/health` requires `Authorization: Bearer $RELAY_TOKEN`.
 | `GET` | `/projects` | Workspaces a new session may run in. |
 | `POST` | `/teleport` | Pulls a claude.ai cloud session onto this machine. |
 | `POST` | `/cloud/send` | Queues a message into a cloud session. Returns without an answer. |
+| `POST` | `/cloud/ask` | Queues a message into a cloud session **and waits for the answer**, which arrives via the Stop hook. See `hooks/README.md`. |
+| `POST` | `/cloud/answer` | Where the Stop hook delivers a finished turn. Takes the narrow `RELAY_ANSWER_TOKEN`, and is the one route outside the main auth gate. |
 | `GET` | `/cloud` | Cloud sessions pulled here before. |
 | `POST` | `/cloud/refresh` | Re-pulls one or all of them. |
 | `GET`/`POST` | `/remote-control` | Reports or starts the Remote Control server. |
@@ -172,6 +192,12 @@ here can see them and no API lists them, so they are reached one at a time:
 - **`/cloud/send`** runs `claude -p "…" --cloud <id>`, which queues a message
   into the session where it already runs and exits. No answer comes back;
   read it in the Claude app.
+
+**`/cloud/ask`** does what `/cloud/send` does and then waits for the answer,
+which a Stop hook committed to the repository posts back to `/cloud/answer`
+from inside the cloud session. That closes a loop that runs entirely in
+Anthropic's cloud, in the session you can watch in the Claude app, with this
+machine acting only as courier. Setup is in [`hooks/README.md`](hooks/README.md).
 
 For one session visible in two places at once, `/remote-control` starts
 `claude remote-control`, a server that serves local sessions to claude.ai and

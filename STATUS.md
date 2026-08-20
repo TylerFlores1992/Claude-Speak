@@ -66,14 +66,30 @@ Do not re-attempt these without new information:
   `.claude/settings.json` SessionStart hooks, `.claude/rules|skills|agents` —
   is the portable alternative and works locally *and* in the cloud.
 
+## The cloud round trip
+
+The proof is built and passes end to end under test: `/cloud/ask` queues a
+message into a real claude.ai session, a Stop hook committed to that repository
+posts the finished turn back to `/cloud/answer`, and the waiting request returns
+it. `relay/hooks/README.md` has the install.
+
+This is the path that makes the work genuinely flow through Claude — the session
+is claude.ai's own, visible in the Claude app, with the relay acting only as
+courier. **Never run against a real cloud session yet.** The remaining unknowns
+are whether a Stop hook fires as documented inside a cloud VM and whether that
+VM can reach the relay through Tailscale Funnel. Both are one trial away.
+
 ## Open threads
 
-1. **Run `claude remote-control` on the mini PC.** Decides the whole
-   session-merging direction. Nothing further should be built on it until
-   this is known.
-2. **Try `Bring it here`** with a real claude.ai session link — the first
+1. **Prove the cloud round trip against a real session.** Install the Stop
+   hook in campsite-finder, set `RELAY_ANSWER_TOKEN`, start Tailscale Funnel,
+   and ask a cloud session something. This is the go/no-go for making cloud
+   sessions the default lane.
+2. **Run `claude remote-control` on the mini PC.** Decides the local half of
+   session merging. Independent of the above; the two lanes complement.
+3. **Try `Bring it here`** with a real claude.ai session link — the first
    actual test of teleport.
-3. **Scaffold repo config for campsite-finder** — a `.claude/settings.json`
+4. **Scaffold repo config for campsite-finder** — a `.claude/settings.json`
    SessionStart hook plus `scripts/setup.sh`, so setup travels with the repo
    into both cloud sessions and relay sessions. Offered, not yet started.
 
