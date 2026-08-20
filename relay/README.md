@@ -87,6 +87,27 @@ It also passes `RELAY_REPO`, `RELAY_PORT`, `RELAY_MODEL`, `RELAY_PROJECTS` and
 process start, so a value `setup.ps1` saved after the window opened is
 invisible to `$env:` but is still found here.
 
+### Start it after a reboot
+
+```powershell
+# As Administrator, once:
+powershell -ExecutionPolicy Bypass -File .\relay\install-autostart.ps1 -Now
+```
+
+Registers a scheduled task and adds a desktop and Start Menu shortcut. The
+task runs as you rather than as SYSTEM, deliberately: the relay shells out to
+the Claude Code CLI, which is authenticated per user, so a task running as
+SYSTEM would start a relay that cannot log in to anything.
+
+It triggers at **logon, not at boot**. A machine that reboots and sits at the
+lock screen starts nothing until someone signs in — turn on automatic sign-in
+if you want it up without you. The task is set to restart on failure and to
+have no execution time limit, because the default kills a task after three
+days, which is not a useful lifetime for something meant to always be up.
+
+`setup.ps1` does all of this too; this script is the same steps split out, for
+a machine that was set up by hand.
+
 ### Configuration
 
 | Variable | Default | What it does |

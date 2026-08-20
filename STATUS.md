@@ -8,7 +8,9 @@ dot. Read this first when picking the project back up.
 - **Phone**: PocketClaude via TestFlight. No Mac exists in this project —
   every build is GitHub Actions (`.github/workflows/ios.yml`), delivered to
   TestFlight. `workflow_dispatch` with `upload_to_testflight: true` ships.
-- **Relay**: `C:\code\Claude-Speak` on a Windows mini PC, serving
+- **Relay**: `C:\code\Claude-Speak` on a Windows mini PC, started by the
+  "PocketClaude relay" scheduled task at logon (`relay/install-autostart.ps1`),
+  serving
   `C:\code\campsite-finder` (the CampHawk repo, actual name `campsite-finder`).
   Reached over Tailscale at `100.119.76.63:8788`.
 - **Watch**: Apple Watch SE3, paired, working.
