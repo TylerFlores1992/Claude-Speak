@@ -146,6 +146,30 @@ Then, from a cloud session in that repository, ask it anything. The hook fires
 when the turn ends. Run the relay with `RELAY_HOOK_DEBUG=1` set in the cloud
 environment to have the hook explain itself on stderr in the session.
 
+## Only the sessions this relay asked
+
+The hook fires at the end of **every** turn in the repository it is committed
+to — work done at a keyboard, a teammate's session, an unrelated cloud task.
+Relaying all of that out of the VM is a surprising amount of text to move on
+the strength of a feature nobody switched on.
+
+So the hook asks first. It posts the session id with **no text**, the relay
+answers `{"wanted": true|false}`, and only a session the relay actually asked
+gets its answer sent. A turn nobody here asked about never leaves the cloud
+session at all — checking after the text arrived would be tidiness, not
+privacy.
+
+The probe uses the same path as delivery on purpose: the relay is published
+through a single path-scoped Funnel mount, and a second endpoint would mean a
+second mount for everyone setting this up.
+
+Two escape hatches:
+
+- `RELAY_ANSWER_ALWAYS=1` on the cloud environment skips the probe. Useful when
+  proving the path works and nothing has asked anything yet.
+- `RELAY_ANSWER_ALL=1` on the relay accepts every session. Same effect from the
+  other end.
+
 ## Why the hook is silent by default
 
 It runs in **every** session that repository is opened in, most of which are

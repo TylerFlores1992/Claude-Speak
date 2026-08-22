@@ -256,6 +256,57 @@ extension RelayClient {
         }
     }
 
+    /// Asks a cloud session and waits for the answer.
+    ///
+    /// The whole turn runs on Anthropic's infrastructure, in the session you
+    /// can open in the Claude app, and comes back through a Stop hook
+    /// committed to that repository. The relay is a courier — nothing about
+    /// this answer was computed on your machine.
+    ///
+    /// Not streamed, unlike `ask`: the hook fires once, when the turn is over,
+    /// so there is nothing to speak as it arrives. The trade is that the
+    /// conversation lives somewhere you can pick it up from any device.
+    func askCloud(sessionID: String, text: String, timeout: TimeInterval = 300) async throws -> String {
+        let json = try await post(
+            path: "cloud/ask",
+            body: [
+                "sessionId": .string(sessionID),
+                "text": .string(text),
+                // A little under the request timeout, so the relay gives up
+                // and explains before the connection does it wordlessly.
+                "timeoutMs": .number(Double(Int(timeout - 20) * 1000)),
+            ],
+            timeout: timeout
+        )
+        if let problem = json["error"]?.stringValue, !problem.isEmpty {
+            throw RelayError.relay(problem)
+        }
+        guard let answer = json["answer"]?.stringValue, !answer.isEmpty else {
+            throw RelayError.emptyResponse
+        }
+        return answer
+    }
+
+    /// Starts a new cloud session with a first task, and returns its id.
+    func startCloudSession(task: String, project: String = "") async throws -> CloudSession {
+        var body: [String: JSONValue] = ["text": .string(task)]
+        if !project.isEmpty { body["project"] = .string(project) }
+        let json = try await post(path: "cloud/start", body: body, timeout: 200)
+        if let problem = json["error"]?.stringValue, !problem.isEmpty {
+            throw RelayError.relay(problem)
+        }
+        guard let id = json["sessionId"]?.stringValue else {
+            throw RelayError.relay("The session started but reported no id.")
+        }
+        return CloudSession(
+            cloudID: id,
+            localID: nil,
+            title: json["title"]?.stringValue,
+            project: project.isEmpty ? nil : project,
+            updatedAt: Date()
+        )
+    }
+
     /// Queues a message into a cloud session.
     ///
     /// Returns without an answer, because the CLI returns without one: this

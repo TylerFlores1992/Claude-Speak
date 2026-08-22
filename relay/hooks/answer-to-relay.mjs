@@ -85,18 +85,43 @@ async function main() {
     return;
   }
 
-  try {
-    const response = await fetch(url, {
+  const post = (body) =>
+    fetch(url, {
       method: "POST",
       headers: {
         "content-type": "application/json",
         authorization: `Bearer ${token}`,
       },
-      body: JSON.stringify({ sessionId, text }),
+      body: JSON.stringify(body),
       // A hook holds the session's turn open while it runs. Ten seconds is
       // plenty for one POST and short enough not to be noticed.
       signal: AbortSignal.timeout(10_000),
     });
+
+  try {
+    // Ask before sending. This hook fires at the end of every turn in the
+    // repository it is committed to, and most of those turns are nobody's
+    // voice loop -- work done at a keyboard, a teammate's session, an
+    // unrelated cloud task. Sending first and letting the relay discard would
+    // move the text out of this VM before deciding it was not wanted, which is
+    // tidiness rather than privacy.
+    //
+    // Set RELAY_ANSWER_ALWAYS=1 to skip the check, which is useful when
+    // proving the path works and nothing has asked anything yet.
+    if (process.env.RELAY_ANSWER_ALWAYS !== "1") {
+      const probe = await post({ sessionId });
+      if (!probe.ok) {
+        note(`relay replied ${probe.status} to the probe`);
+        return;
+      }
+      const { wanted } = await probe.json().catch(() => ({}));
+      if (!wanted) {
+        note("relay did not ask this session; not sending the answer");
+        return;
+      }
+    }
+
+    const response = await post({ sessionId, text });
     note(`relay replied ${response.status}`);
   } catch (error) {
     note(`could not reach the relay: ${error.message}`);
