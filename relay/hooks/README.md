@@ -76,12 +76,19 @@ Anthropic's infrastructure and cannot see a Tailscale address. Tailscale Funnel
 publishes one HTTPS endpoint:
 
 ```powershell
-tailscale funnel 8788
+tailscale funnel --bg --set-path=/answer http://127.0.0.1:8788/cloud/answer
 ```
 
-It prints a `https://<machine>.<tailnet>.ts.net` URL. Everything behind it is
-still bearer-token authenticated, and `/cloud/answer` accepts only the narrow
-answer token.
+Path-scoped deliberately. `tailscale funnel 8788` would publish the *whole*
+relay to the public internet, including `/ask`, which runs Claude Code on that
+machine — and Funnel hostnames appear in public certificate-transparency logs,
+so the address is discoverable. Mounting only the answer route means the worst a
+stolen answer token buys is putting words in your ear; everything else stays
+reachable only from your tailnet.
+
+The public URL becomes `https://<machine>.<tailnet>.ts.net/answer`, and that
+— not `/cloud/answer` — is what goes in `RELAY_ANSWER_URL`. `--bg` keeps it
+running after you close the window; check it with `tailscale funnel status`.
 
 **4. Set two variables on the cloud environment** at claude.ai/code, in the
 environment dialog:
@@ -95,8 +102,22 @@ environment dialog:
 
 With the relay running and the funnel up:
 
+On Windows, use PowerShell's own client rather than `curl.exe`. Single quotes
+in PowerShell pass backslashes through literally, so a bash-style `-d '{\"a\":1}'`
+arrives as mangled JSON and the relay reports an unterminated string:
+
+```powershell
+$body = @{ sessionId = "session_01TEST"; text = "hello from outside" } | ConvertTo-Json
+Invoke-RestMethod -Method Post `
+  -Uri "https://<your-funnel-host>/answer" `
+  -Headers @{ Authorization = "Bearer $env:RELAY_ANSWER_TOKEN" } `
+  -ContentType "application/json" -Body $body
+```
+
+From a shell where the quoting behaves:
+
 ```bash
-curl -X POST https://<your-funnel-host>/cloud/answer \
+curl -X POST https://<your-funnel-host>/answer \
   -H "Authorization: Bearer $RELAY_ANSWER_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"sessionId":"session_01TEST","text":"hello from outside"}'
