@@ -76,7 +76,8 @@ $env:RELAY_TOKEN = $token
 # exit for a restart. Without it the relay updates but keeps running the old
 # code, which is the honest outcome when nothing would bring it back.
 $env:RELAY_SUPERVISED = "1"
-foreach ($name in @("RELAY_REPO", "RELAY_PORT", "RELAY_MODEL", "RELAY_PROJECTS", "RELAY_SCRATCH")) {
+foreach ($name in @("RELAY_REPO", "RELAY_PORT", "RELAY_MODEL", "RELAY_PROJECTS",
+                    "RELAY_SCRATCH", "RELAY_ANSWER_TOKEN")) {
     $value = Resolve-Setting $name
     if ($value) { Set-Item -Path "env:$name" -Value $value }
 }

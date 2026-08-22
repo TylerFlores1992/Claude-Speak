@@ -703,18 +703,24 @@ function awaitAnswer(id, timeoutMs) {
   });
 }
 
-/** True when the request carries either the answer token or the main one. */
+/**
+ * True when the request carries the answer token.
+ *
+ * The answer token and nothing else -- deliberately not RELAY_TOKEN as well,
+ * which it briefly accepted for convenience. This is the one route published to
+ * the public internet through Tailscale Funnel, so the set of credentials that
+ * open it should be the smallest possible, and RELAY_TOKEN is the one that can
+ * run Claude Code on this machine. Accepting it here would mean a leak of the
+ * powerful token also lets a stranger put words in your ear.
+ */
 function authorizedForAnswer(req) {
+  if (!ANSWER_TOKEN) return false;
   const header = req.headers.authorization ?? "";
   const presented = header.startsWith("Bearer ") ? header.slice(7) : "";
   if (!presented) return false;
-  for (const expected of [ANSWER_TOKEN, TOKEN]) {
-    if (!expected) continue;
-    const a = Buffer.from(presented);
-    const b = Buffer.from(expected);
-    if (a.length === b.length && timingSafeEqual(a, b)) return true;
-  }
-  return false;
+  const a = Buffer.from(presented);
+  const b = Buffer.from(ANSWER_TOKEN);
+  return a.length === b.length && timingSafeEqual(a, b);
 }
 
 // Remote Control.
