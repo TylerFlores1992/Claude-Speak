@@ -35,6 +35,11 @@ struct DashboardView: View {
     @State private var refreshSummary: String?
     @State private var newCloudTask = ""
     @State private var isStartingCloud = false
+    /// Kept apart from `sendProblem` on purpose. They were the same value, and
+    /// it was rendered in the "Leave it there" section — so a failure to
+    /// *start* a session appeared somewhere else on the screen, often below the
+    /// fold. Pressing a button and seeing nothing is the result.
+    @State private var startProblem: String?
     @State private var remoteControl = RelayClient.RemoteControlState(running: false)
     @State private var isTogglingRemoteControl = false
     /// Set by a delete swipe; the confirmation dialog acts on it. Deleting is
@@ -254,6 +259,18 @@ struct DashboardView: View {
                         isStartingCloud
                             || newCloudTask.trimmingCharacters(in: .whitespaces).isEmpty
                     )
+
+                    if isStartingCloud {
+                        Text("Provisioning a machine and cloning the repository. This takes a minute.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    if let startProblem {
+                        Label(startProblem, systemImage: "exclamationmark.triangle.fill")
+                            .font(.footnote)
+                            .foregroundStyle(.orange)
+                    }
                 } header: {
                     Text("Start something new")
                 } footer: {
@@ -330,7 +347,7 @@ struct DashboardView: View {
     }
 
     private func startCloudSession() async {
-        sendProblem = nil
+        startProblem = nil
         isStartingCloud = true
         defer { isStartingCloud = false }
         do {
@@ -345,7 +362,7 @@ struct DashboardView: View {
             viewModel.useCloudSession(session)
             isBringingCloudSession = false
         } catch {
-            sendProblem = (error as? LocalizedError)?.errorDescription
+            startProblem = (error as? LocalizedError)?.errorDescription
                 ?? error.localizedDescription
         }
     }

@@ -551,9 +551,19 @@ final class ConversationViewModel: ObservableObject {
     }
 
     /// Starts a new cloud session with a first task.
+    ///
+    /// Checks the relay is there first. Starting genuinely takes a while, so
+    /// its timeout is long, and waiting out a long timeout to be told the relay
+    /// was never reachable is the worst version of this.
     func startCloudSession(task: String, project: String) async throws -> CloudSession {
         guard let client = RelayClient.make(settings: settings) else {
             throw RelayError.notConfigured
+        }
+        guard await client.isReachable() else {
+            throw RelayError.relay(
+                "Can't reach the relay. It has to be running and on your tailnet to start a cloud session — "
+                    + "the work runs in Anthropic's cloud, but the relay is what asks for it."
+            )
         }
         return try await client.startCloudSession(task: task, project: project)
     }
