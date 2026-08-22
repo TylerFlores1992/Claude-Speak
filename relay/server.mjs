@@ -1175,9 +1175,14 @@ const server = createServer((req, res) => {
         if (!id) return respond(res, 400, { error: "sessionId is required" });
         if (!text.trim()) return respond(res, 400, { error: "text is required" });
         const claimed = deliverAnswer(id, text);
-        // `claimed` says whether anyone was waiting. Reported rather than
-        // hidden: during the first round-trip test it is the difference
-        // between "the hook works" and "the hook works and the phone heard it".
+        // Logged, because the relay window is where this is watched from and
+        // an unlogged POST is indistinguishable from no POST at all. `claimed`
+        // is the interesting half: it separates "the hook reached us" from
+        // "the hook reached us and something was waiting for it".
+        const preview = text.replace(/\s+/g, " ").slice(0, 60);
+        console.log(
+          `answer: ${id} ${text.length} chars ${claimed ? "-> waiting request" : "(buffered)"}\n  ${preview}${text.length > 60 ? "..." : ""}`
+        );
         respond(res, 200, { ok: true, sessionId: id, claimed });
       })
       .catch((error) => respond(res, 400, { error: error.message }));
