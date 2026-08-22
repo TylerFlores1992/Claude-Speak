@@ -53,6 +53,22 @@ state, no local model, no "which machine has the session".
 `$CLAUDE_PROJECT_DIR` resolves to the repository root, so the hook is found
 whatever directory the session is working in.
 
+If you edit that file from PowerShell, check it afterwards:
+
+```powershell
+node -e "JSON.parse(require('fs').readFileSync('.claude/settings.json','utf8')); console.log('valid')"
+```
+
+`Set-Content -Encoding UTF8` on Windows PowerShell 5.1 writes a byte-order
+mark, and Node's `JSON.parse` throws on one. Claude Code reads this file with
+Node, so a BOM disables **every** hook in the repository, not just the one you
+were adding — and it does it silently. Strip it with:
+
+```powershell
+$path = ".\.claude\settings.json"
+[IO.File]::WriteAllText((Resolve-Path $path), (Get-Content $path -Raw), (New-Object Text.UTF8Encoding $false))
+```
+
 **2. Give the relay an answer token.** A *second* token, separate from
 `RELAY_TOKEN`:
 
