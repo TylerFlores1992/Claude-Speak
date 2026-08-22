@@ -946,9 +946,19 @@ function parseCloudSessionId(input) {
   return text;
 }
 
-/** Arguments for queueing a message into a cloud session. */
-function cloudSendArgs(sessionId, text) {
-  return ["-p", text, "--cloud", sessionId, "--output-format", "json"];
+/**
+ * Arguments for queueing a message into a cloud session.
+ *
+ * The message is *not* here: it goes in on stdin. Passing it as the argument
+ * to -p failed with "Input must be provided either through stdin or as a
+ * prompt argument when using --print", because the relay spawns with stdin
+ * ignored -- which is an empty pipe, not an absent one, so the CLI reads it,
+ * finds nothing, and reports no input. `echo "..." | claude -p --cloud <id>`
+ * is the form the docs give for scripts, and it is the one that matches how
+ * this is spawned.
+ */
+function cloudSendArgs(sessionId) {
+  return ["-p", "--cloud", sessionId, "--output-format", "json"];
 }
 
 /**
@@ -1403,10 +1413,10 @@ const server = createServer((req, res) => {
         const waiting = awaitAnswer(sessionId, Number(body.timeoutMs) || 240_000);
 
         try {
-          execFileSync(CLAUDE_BIN, cloudSendArgs(sessionId, text), {
+          execFileSync(CLAUDE_BIN, cloudSendArgs(sessionId), {
             encoding: "utf8",
             timeout: 60_000,
-            stdio: ["ignore", "pipe", "pipe"],
+            input: text,
           });
         } catch (error) {
           return respond(res, 502, { error: explainCloudFailure(error.stderr || error.stdout || error.message) });
@@ -1437,10 +1447,10 @@ const server = createServer((req, res) => {
 
         let output;
         try {
-          output = execFileSync(CLAUDE_BIN, cloudSendArgs(sessionId, text), {
+          output = execFileSync(CLAUDE_BIN, cloudSendArgs(sessionId), {
             encoding: "utf8",
             timeout: 60_000,
-            stdio: ["ignore", "pipe", "pipe"],
+            input: text,
           });
         } catch (error) {
           return respond(res, 502, {

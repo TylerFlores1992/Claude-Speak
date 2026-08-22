@@ -716,11 +716,13 @@ test("refuses empty, short, and non-string input", () => {
 });
 
 test("builds the documented cloud and teleport commands", () => {
-  // Order matters: the message is the value of -p, and --output-format json is
-  // what makes the result parseable rather than prose.
+  // The message is absent on purpose: it goes in on stdin. Passing it as the
+  // value of -p failed with "Input must be provided either through stdin or as
+  // a prompt argument", because the relay spawns with stdin ignored -- an
+  // empty pipe rather than an absent one, which the CLI reads and finds empty.
   assert.deepEqual(
-    cloudSendArgs("session_01abcdef2345", "run the tests"),
-    ["-p", "run the tests", "--cloud", "session_01abcdef2345", "--output-format", "json"]
+    cloudSendArgs("session_01abcdef2345"),
+    ["-p", "--cloud", "session_01abcdef2345", "--output-format", "json"]
   );
   assert.deepEqual(teleportArgs("session_01abcdef2345"), ["--teleport", "session_01abcdef2345"]);
 });
@@ -753,11 +755,12 @@ test("any other failure keeps its own words", () => {
   assert.equal(explainCloudFailure("fatal: repository not found"), "fatal: repository not found");
 });
 
-test("a message that looks like a flag is still a message", () => {
-  // It sits after -p as its value, so it is never parsed as an option.
-  const args = cloudSendArgs("session_01abcdef2345", "--help");
-  assert.equal(args[0], "-p");
-  assert.equal(args[1], "--help");
+test("no message reaches the command line at all", () => {
+  // Which also means a message that looks like a flag cannot be read as one:
+  // it never appears in argv.
+  const args = cloudSendArgs("session_01abcdef2345");
+  assert.ok(!args.includes("--help"));
+  assert.deepEqual(args, ["-p", "--cloud", "session_01abcdef2345", "--output-format", "json"]);
 });
 
 // --- Deleting sessions -----------------------------------------------------
