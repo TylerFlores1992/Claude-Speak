@@ -20,12 +20,16 @@ import {
   projects,
   resolveProject,
   cleanTitle,
+  deliverAnswer,
+  awaitAnswer,
+  markAsked,
   resolveSessionCwd,
   sessionFilePath,
   parseLiveIds,
   extractSessionURL,
   parseCloudSessionId,
   cloudSendArgs,
+  cloudStartArgs,
   teleportArgs,
 } from "./server.mjs";
 
@@ -351,8 +355,31 @@ try {
       body: JSON.stringify({ sessionId: "session_01BUFFERED", text: "held for later" }),
     });
     assert.equal(response.status, 200);
-    // Nobody was waiting, so it was buffered rather than handed over.
-    assert.equal((await response.json()).claimed, false);
+    // Accepted, then ignored: the token is right, but this relay never asked
+    // that session anything. Authentication and scoping are separate gates.
+    assert.equal((await response.json()).ignored, true);
+  });
+
+  await asyncTest("a session the relay never asked is not wanted", async () => {
+    // The probe: no text, so nothing has left the cloud VM yet. This is what
+    // stops every turn in the repository being relayed out.
+    const response = await fetch(`${base}/cloud/answer`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${ANSWER_TOKEN}` },
+      body: JSON.stringify({ sessionId: "session_01NEVERASKED" }),
+    });
+    assert.equal((await response.json()).wanted, false);
+  });
+
+  await asyncTest("an answer for a session nobody asked is ignored", async () => {
+    // Belt and braces: a hook that skips the probe, or an older one, must not
+    // be able to fill the inbox with turns nobody wanted.
+    const response = await fetch(`${base}/cloud/answer`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${ANSWER_TOKEN}` },
+      body: JSON.stringify({ sessionId: "session_01NEVERASKED", text: "unsolicited" }),
+    });
+    assert.equal((await response.json()).ignored, true);
   });
 
   await asyncTest("a question is answered by the hook that fires after it", async () => {
@@ -365,7 +392,9 @@ try {
     });
 
     // The hook reports the session as cse_, the phone asked as session_. The
-    // relay has to match them or an answer never finds its question.
+    // relay has to match them or an answer never finds its question -- and the
+    // asked-marker has to match across the two spellings too, or the probe
+    // would refuse the very answer the request is waiting for.
     let delivered = false;
     for (let attempt = 0; attempt < 50 && !delivered; attempt++) {
       await new Promise((resolve) => setTimeout(resolve, 20));
@@ -381,6 +410,17 @@ try {
     const result = await (await asking).json();
     assert.equal(result.answer, "It is 4:15 PM.");
     assert.equal(result.sessionId, "session_01LOOP");
+  });
+
+  await asyncTest("asking a session makes its answers wanted", async () => {
+    // Same session as the loop test above, which /cloud/ask marked. Asked as
+    // session_, probed as cse_: the marker is matched across both spellings.
+    const response = await fetch(`${base}/cloud/answer`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${ANSWER_TOKEN}` },
+      body: JSON.stringify({ sessionId: "cse_01LOOP" }),
+    });
+    assert.equal((await response.json()).wanted, true);
   });
 
   await asyncTest("a turn that never answers says so rather than hanging", async () => {
@@ -599,6 +639,35 @@ test("an unknown session id resolves to no directory", () => {
   assert.equal(resolveSessionCwd(undefined), null);
 });
 
+// --- The answer inbox ------------------------------------------------------
+//
+// An answer can arrive before anything is waiting for it: a short turn can
+// finish before the request that asked gets around to waiting. Buffering
+// covers that, and the buffer is consumed once.
+
+await asyncTest("an answer that arrives first is held for whoever asks next", async () => {
+  // The timeout inside awaitAnswer is unref'd so a waiter never holds the
+  // relay process open. In the server that is invisible, because a listening
+  // socket keeps the loop alive; here nothing does, so the timeout would never
+  // fire and this test would exit rather than fail.
+  const keepalive = setInterval(() => {}, 1000);
+  try {
+    markAsked("session_01HELD");
+    assert.equal(deliverAnswer("session_01HELD", "held"), false, "nobody was waiting yet");
+    assert.equal(await awaitAnswer("session_01HELD", 50), "held");
+    // Consumed, not left behind for the next question in the same session.
+    assert.equal(await awaitAnswer("session_01HELD", 50), null);
+  } finally {
+    clearInterval(keepalive);
+  }
+});
+
+await asyncTest("an answer matches the question across both id spellings", async () => {
+  const waiting = awaitAnswer("session_01SPELL", 500);
+  deliverAnswer("cse_01SPELL", "matched");
+  assert.equal(await waiting, "matched");
+});
+
 // --- Cloud sessions --------------------------------------------------------
 //
 // The session id arrives from the phone and is handed to the CLI as an
@@ -653,6 +722,16 @@ test("builds the documented cloud and teleport commands", () => {
     ["-p", "run the tests", "--cloud", "session_01abcdef2345", "--output-format", "json"]
   );
   assert.deepEqual(teleportArgs("session_01abcdef2345"), ["--teleport", "session_01abcdef2345"]);
+});
+
+test("starting a cloud session asks for a parseable result", () => {
+  // --output-format json is what makes the new session's id readable. Without
+  // it the CLI prints prose and the relay has nothing to follow the session by.
+  const args = cloudStartArgs("fix the flaky test");
+  assert.deepEqual(args, ["--cloud", "fix the flaky test", "--output-format", "json"]);
+  // The task sits directly after --cloud as its value, so a task that begins
+  // with a dash is still a task.
+  assert.equal(cloudStartArgs("--help")[1], "--help");
 });
 
 test("a message that looks like a flag is still a message", () => {

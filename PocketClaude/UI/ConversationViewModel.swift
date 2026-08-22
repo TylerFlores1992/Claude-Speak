@@ -446,6 +446,15 @@ final class ConversationViewModel: ObservableObject {
     /// configured repository.
     @Published var activeProject: String = ""
 
+    /// When set, questions go to this claude.ai cloud session instead of the
+    /// relay's own Claude Code. The answer comes back through the Stop hook
+    /// committed to that repository.
+    ///
+    /// The conversation then lives in claude.ai rather than on the relay
+    /// machine, which is the point: it can be opened in the Claude app on any
+    /// device, mid-flight, and picked up there.
+    @Published var activeCloudSessionID: String = ""
+
     /// The workspace name to send with a question, or "" to let the relay
     /// decide.
     ///
@@ -513,6 +522,40 @@ final class ConversationViewModel: ObservableObject {
         return on
             ? try await client.startRemoteControl(project: project)
             : try await client.stopRemoteControl()
+    }
+
+    /// Points the conversation at a cloud session.
+    func useCloudSession(_ session: CloudSession) {
+        store.save(self.session)
+        var fresh = Session(model: settings.model.rawValue)
+        // No relay session id: this conversation's history lives in the cloud
+        // session, not in a local transcript, and `--cloud` carries it there.
+        fresh.relaySessionID = nil
+        self.session = fresh
+        activeCloudSessionID = session.cloudID
+        activeProject = session.project ?? "Cloud"
+        append(.init(
+            kind: .status,
+            text: "Talking to \u{201C}\(session.displayTitle)\u{201D} on claude.ai. "
+                + "Answers run there and come back when the turn finishes, so there is a wait "
+                + "and nothing to speak as it arrives. Open it in the Claude app any time."
+        ))
+        state = .idle
+    }
+
+    /// Leaves the cloud session and goes back to the relay's own Claude Code.
+    func leaveCloudSession() {
+        guard !activeCloudSessionID.isEmpty else { return }
+        activeCloudSessionID = ""
+        newSession()
+    }
+
+    /// Starts a new cloud session with a first task.
+    func startCloudSession(task: String, project: String) async throws -> CloudSession {
+        guard let client = RelayClient.make(settings: settings) else {
+            throw RelayError.notConfigured
+        }
+        return try await client.startCloudSession(task: task, project: project)
     }
 
     /// Cloud sessions the relay has pulled down before.
@@ -586,11 +629,73 @@ final class ConversationViewModel: ObservableObject {
 
     func send(_ text: String) async {
         guard !text.isEmpty else { return }
+        // A chosen cloud session wins over the backend setting. Both go
+        // through the relay, but one runs Claude Code on your machine and the
+        // other runs it in Anthropic's cloud, in a session you can open
+        // anywhere.
+        if !activeCloudSessionID.isEmpty {
+            await sendToCloudSession(text)
+            return
+        }
         switch settings.backend {
         case .relay:
             await sendViaRelay(text)
         case .directAPI:
             await sendViaDirectAPI(text)
+        }
+    }
+
+    // MARK: - Cloud session backend
+
+    /// Asks a claude.ai cloud session and speaks the answer when it lands.
+    ///
+    /// No streaming, and the reason is structural rather than a shortcut: the
+    /// Stop hook fires once, when the turn is finished, so there is no partial
+    /// text to speak. The wait buys a conversation that lives in claude.ai and
+    /// can be picked up in the Claude app on any device.
+    private func sendToCloudSession(_ text: String) async {
+        guard let client = RelayClient.make(settings: settings) else {
+            errorMessage = RelayError.notConfigured.errorDescription
+            state = .idle
+            isShowingSettings = true
+            return
+        }
+
+        append(.init(kind: .user, text: text))
+        state = .working("Running on claude.ai")
+
+        do {
+            let answer = try await client.askCloud(sessionID: activeCloudSessionID, text: text)
+            let spoken = answer.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !spoken.isEmpty else { throw RelayError.emptyResponse }
+
+            append(.init(kind: .assistant, text: spoken))
+            persist()
+
+            state = .speaking
+            if settings.stemPressControl {
+                remoteCommands.publishNowPlaying(title: spoken, isPlaying: true)
+            }
+            // The same call the relay path makes for a non-streamed answer, so
+            // SpeechChunker strips the markdown rather than reading asterisks
+            // aloud — cloud answers arrive as raw markdown like any other.
+            speech.speak(
+                spoken,
+                engine: settings.voiceEngine,
+                voiceIdentifier: settings.systemVoiceIdentifier,
+                elevenLabsVoiceID: settings.elevenLabsVoiceID,
+                rate: settings.speechRate
+            )
+            await waitForSpeechToFinish()
+            if case .speaking = state { state = .idle }
+        } catch {
+            speech.stop()
+            let message = (error as? LocalizedError)?.errorDescription
+                ?? error.localizedDescription
+            errorMessage = message
+            append(.init(kind: .error, text: message))
+            persist()
+            state = .idle
         }
     }
 

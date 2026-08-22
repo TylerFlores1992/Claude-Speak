@@ -42,6 +42,10 @@ const SUPERVISED = process.env.RELAY_SUPERVISED === "1";
 // using that environment and is not a secrets store. This one can do exactly
 // one thing - deliver an answer - so leaking it costs far less.
 const ANSWER_TOKEN = process.env.RELAY_ANSWER_TOKEN ?? "";
+// Accept answers from every session in the repository, not only the ones this
+// relay asked. Off by default: a Stop hook fires on every turn, so leaving it
+// on sends work done at a keyboard out of the VM as well.
+const ANSWER_ALL = process.env.RELAY_ANSWER_ALL === "1";
 const MODEL = process.env.RELAY_MODEL ?? "";
 const TIMEOUT_MS = Number(process.env.RELAY_TIMEOUT_MS ?? 300_000);
 
@@ -644,6 +648,40 @@ const answerInbox = new Map(); // id -> { text, at }
 const answerWaiters = new Map(); // id -> [resolve]
 const ANSWER_TTL_MS = 30 * 60 * 1000;
 
+// Cloud sessions this relay has asked something. A Stop hook fires at the end
+// of *every* turn in the repository it is committed to, so without this the
+// answer to work done at a keyboard, by a teammate, or by an unrelated cloud
+// session all leave the VM and arrive here. Nobody asked for that, and it is a
+// surprising amount of text to be moving on the strength of a feature nobody
+// switched on.
+//
+// The relay records the sessions it asked, and the hook checks before sending.
+// Sessions age out: the marker exists to cover one question and its answer.
+const askedSessions = new Map(); // id -> asked at
+const ASKED_TTL_MS = 60 * 60 * 1000;
+
+function markAsked(id) {
+  const key = normalizeCloudId(id);
+  if (!key) return;
+  const cutoff = Date.now() - ASKED_TTL_MS;
+  for (const [existing, at] of askedSessions) {
+    if (at < cutoff) askedSessions.delete(existing);
+  }
+  askedSessions.set(key, Date.now());
+}
+
+function wasAsked(id) {
+  const key = normalizeCloudId(id);
+  if (!key) return false;
+  const at = askedSessions.get(key);
+  if (at === undefined) return false;
+  if (Date.now() - at > ASKED_TTL_MS) {
+    askedSessions.delete(key);
+    return false;
+  }
+  return true;
+}
+
 /** Hands an answer to whoever is waiting, or holds it for whoever asks next. */
 function deliverAnswer(id, text) {
   const key = normalizeCloudId(id);
@@ -913,6 +951,11 @@ function cloudSendArgs(sessionId, text) {
   return ["-p", text, "--cloud", sessionId, "--output-format", "json"];
 }
 
+/** Arguments for starting a new cloud session with a first task. */
+function cloudStartArgs(task) {
+  return ["--cloud", task, "--output-format", "json"];
+}
+
 /** Arguments for pulling a cloud session onto this machine. */
 function teleportArgs(sessionId) {
   return ["--teleport", sessionId];
@@ -1173,7 +1216,30 @@ const server = createServer((req, res) => {
         const id = normalizeCloudId(body.sessionId);
         const text = typeof body.text === "string" ? body.text : "";
         if (!id) return respond(res, 400, { error: "sessionId is required" });
-        if (!text.trim()) return respond(res, 400, { error: "text is required" });
+
+        // Whether this relay wants to hear from this session at all.
+        const wanted = ANSWER_ALL || wasAsked(id);
+
+        // No text is a probe. The hook asks before it sends, so a turn nobody
+        // here asked about never leaves the cloud VM in the first place --
+        // which is the point. Checking after the text arrived would discard it
+        // having already moved it, which is not privacy, only tidiness.
+        //
+        // Deliberately the same path as delivery: the relay is published to the
+        // internet through a single path-scoped Funnel mount, and a second
+        // endpoint would mean a second mount for everyone setting this up.
+        if (!text.trim()) {
+          return respond(res, 200, { ok: true, wanted });
+        }
+
+        if (!wanted) {
+          // Said out loud rather than silently dropped: a hook that is working
+          // correctly and a hook whose answers are being binned look identical
+          // otherwise.
+          console.log(`answer: ${id} ignored (this relay didn't ask that session)`);
+          return respond(res, 200, { ok: true, ignored: true });
+        }
+
         const claimed = deliverAnswer(id, text);
         // Logged, because the relay window is where this is watched from and
         // an unlogged POST is indistinguishable from no POST at all. `claimed`
@@ -1225,6 +1291,72 @@ const server = createServer((req, res) => {
     return;
   }
 
+  if (req.method === "POST" && req.url === "/cloud/start") {
+    readJSON(req)
+      .then((body) => {
+        const task = typeof body.text === "string" ? body.text.trim() : "";
+        if (!task) return respond(res, 400, { error: "Say what the session should do." });
+
+        const cwd = resolveProject(typeof body.project === "string" ? body.project : "");
+        if (!cwd) return respond(res, 400, { error: "Unknown workspace." });
+
+        let output;
+        try {
+          // Run from a checkout, because --cloud clones the current
+          // directory's GitHub remote at the current branch. Which repository
+          // the session works on is decided by where this runs, not by a flag.
+          output = execFileSync(CLAUDE_BIN, cloudStartArgs(task), {
+            cwd,
+            encoding: "utf8",
+            timeout: 180_000,
+            stdio: ["ignore", "pipe", "pipe"],
+          });
+        } catch (error) {
+          return respond(res, 502, {
+            error: (error.stderr || error.message || "").split("\n").filter(Boolean).slice(-3).join(" ").trim(),
+          });
+        }
+
+        const parsed = (() => {
+          try {
+            return JSON.parse(output);
+          } catch {
+            return null;
+          }
+        })();
+        const sessionId = normalizeCloudId(parsed?.session_id ?? "");
+        if (!sessionId) {
+          return respond(res, 502, {
+            error: "The session started but the CLI did not report an id, so nothing here can follow it.",
+          });
+        }
+
+        // Remembered on both counts: its answers are wanted, and it joins the
+        // list the phone can refresh. Starting a session is a stronger signal
+        // of interest than pasting a link.
+        markAsked(sessionId);
+        const state = loadCloud();
+        state[sessionId] = {
+          ...(state[sessionId] ?? {}),
+          localId: state[sessionId]?.localId ?? null,
+          previousIds: state[sessionId]?.previousIds ?? [],
+          title: firstLine(task),
+          project: basename(cwd),
+          cwd,
+          updatedAt: new Date().toISOString(),
+        };
+        saveCloud(state);
+
+        respond(res, 200, {
+          sessionId,
+          url: parsed?.url ?? `https://claude.ai/code/${sessionId}`,
+          title: firstLine(task),
+        });
+      })
+      .catch((error) => respond(res, 400, { error: error.message }));
+    return;
+  }
+
   if (req.method === "POST" && req.url === "/cloud/ask") {
     readJSON(req)
       .then(async (body) => {
@@ -1242,6 +1374,7 @@ const server = createServer((req, res) => {
         // send call even returns, and a waiter registered afterwards would
         // miss it -- the inbox covers that, but only because of this order
         // being wrong is a race worth not having in the first place.
+        markAsked(sessionId);
         const waiting = awaitAnswer(sessionId, Number(body.timeoutMs) || 240_000);
 
         try {
@@ -1298,6 +1431,10 @@ const server = createServer((req, res) => {
             return null;
           }
         })();
+        // Marked even though nothing here waits for the answer: the phone may
+        // poll for it later, and a session the relay deliberately messaged is
+        // one whose reply is wanted.
+        markAsked(sessionId);
         // Queue-and-exit: the CLI confirms delivery, not an answer. Saying so
         // here keeps the phone from waiting for a reply that never comes.
         respond(res, 200, {
@@ -1558,8 +1695,11 @@ export {
   normalizeCloudId,
   deliverAnswer,
   awaitAnswer,
+  markAsked,
+  wasAsked,
   extractSessionURL,
   parseCloudSessionId,
   cloudSendArgs,
+  cloudStartArgs,
   teleportArgs,
 };

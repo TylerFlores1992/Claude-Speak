@@ -185,7 +185,7 @@ struct ConversationScreen: View {
     /// read.
     private var composer: some View {
         VStack(spacing: 12) {
-            TextField(composerPrompt, text: $typedInput, axis: .vertical)
+            TextField(composerPromptForLane, text: $typedInput, axis: .vertical)
                 .textFieldStyle(.plain)
                 .lineLimit(1...5)
                 .font(.body)
@@ -206,6 +206,28 @@ struct ConversationScreen: View {
                     }
                     .accessibilityLabel("Hide the keyboard")
                     .transition(.scale.combined(with: .opacity))
+                }
+
+                if !viewModel.activeCloudSessionID.isEmpty {
+                    // Named on the composer rather than only in the transcript,
+                    // because which machine answers changes what to expect: a
+                    // wait instead of speech as it arrives, and a conversation
+                    // that outlives this app.
+                    Button {
+                        viewModel.leaveCloudSession()
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: "cloud.fill").font(.caption2)
+                            Text("claude.ai")
+                                .font(.subheadline.weight(.medium))
+                            Image(systemName: "xmark").font(.caption2)
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 9)
+                        .background(Color.accentColor.opacity(0.18), in: Capsule())
+                        .foregroundStyle(Color.accentColor)
+                    }
+                    .accessibilityLabel("On claude.ai. Tap to go back to the relay.")
                 }
 
                 ChipMenu(title: modelChipTitle, systemImage: "sparkle") {
@@ -279,6 +301,12 @@ struct ConversationScreen: View {
         settings.model.supportsAdaptiveThinking
             ? "\(settings.model.shortName) \(settings.effort.displayName)"
             : settings.model.shortName
+    }
+
+    /// The prompt names where the question is going, since the two lanes
+    /// behave differently enough that guessing is unpleasant.
+    private var composerPromptForLane: String {
+        viewModel.activeCloudSessionID.isEmpty ? composerPrompt : "Ask the cloud session"
     }
 
     private var hasTypedText: Bool {

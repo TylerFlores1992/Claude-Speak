@@ -33,6 +33,8 @@ struct DashboardView: View {
     @State private var cloudSessions: [CloudSession] = []
     @State private var isRefreshingCloud = false
     @State private var refreshSummary: String?
+    @State private var newCloudTask = ""
+    @State private var isStartingCloud = false
     @State private var remoteControl = RelayClient.RemoteControlState(running: false)
     @State private var isTogglingRemoteControl = false
     /// Set by a delete swipe; the confirmation dialog acts on it. Deleting is
@@ -184,14 +186,18 @@ struct DashboardView: View {
                 if !cloudSessions.isEmpty {
                     Section {
                         ForEach(cloudSessions) { session in
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(session.displayTitle).lineLimit(1)
-                                if let project = session.project {
-                                    Text(project)
+                            Button {
+                                viewModel.useCloudSession(session)
+                                isBringingCloudSession = false
+                            } label: {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(session.displayTitle).lineLimit(1)
+                                    Text(session.project ?? "on claude.ai")
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                 }
                             }
+                            .buttonStyle(.plain)
                         }
 
                         Button {
@@ -216,6 +222,36 @@ struct DashboardView: View {
                         // Both limits stated, because both are surprising.
                         Text("Nothing can list your cloud sessions, so these are the ones you have pulled down before — pulling a new one adds it here. Updating re-pulls each of them, which needs a clean checkout of its repository; anything with uncommitted work is reported and skipped rather than stopping the rest.")
                     }
+                }
+
+                Section {
+                    TextField("What should it work on?", text: $newCloudTask, axis: .vertical)
+                        .lineLimit(1...4)
+
+                    Picker("Repository", selection: $teleportProject) {
+                        Text("Relay default").tag("")
+                        ForEach(projects.filter { $0.available && !$0.isScratch }) { project in
+                            Text(project.name).tag(project.name)
+                        }
+                    }
+
+                    Button {
+                        Task { await startCloudSession() }
+                    } label: {
+                        HStack {
+                            Text("Start a session on claude.ai")
+                            Spacer()
+                            if isStartingCloud { ProgressView().controlSize(.small) }
+                        }
+                    }
+                    .disabled(
+                        isStartingCloud
+                            || newCloudTask.trimmingCharacters(in: .whitespaces).isEmpty
+                    )
+                } header: {
+                    Text("Start something new")
+                } footer: {
+                    Text("Runs on Anthropic's infrastructure, in a session you can open in the Claude app. It clones the repository from GitHub at its current branch, so push anything local first. Once it exists you can talk to it by voice from here.")
                 }
 
                 Section {
@@ -284,6 +320,27 @@ struct DashboardView: View {
                 url: nil,
                 problem: (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             )
+        }
+    }
+
+    private func startCloudSession() async {
+        sendProblem = nil
+        isStartingCloud = true
+        defer { isStartingCloud = false }
+        do {
+            let session = try await viewModel.startCloudSession(
+                task: newCloudTask.trimmingCharacters(in: .whitespacesAndNewlines),
+                project: teleportProject
+            )
+            newCloudTask = ""
+            await loadCloudSessions()
+            // Straight into it: starting a session is asking for it, and
+            // making you find the row you just created would be busywork.
+            viewModel.useCloudSession(session)
+            isBringingCloudSession = false
+        } catch {
+            sendProblem = (error as? LocalizedError)?.errorDescription
+                ?? error.localizedDescription
         }
     }
 

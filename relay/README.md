@@ -144,6 +144,7 @@ a machine that was set up by hand.
 | `RELAY_TITLES_PER_REFRESH` | `5` | How many unnamed sessions to name per `/sessions` call. |
 | `RELAY_SUPERVISED` | *(set by `run.ps1`)* | Tells the relay a supervisor exists, so an update may exit to restart. |
 | `RELAY_ANSWER_TOKEN` | *(none)* | Narrow token for `/cloud/answer` only. Without it, cloud answers are refused. See `hooks/README.md`. |
+| `RELAY_ANSWER_ALL` | `0` | Accept answers from every cloud session, not only ones this relay asked. |
 
 ### Endpoints
 
@@ -160,6 +161,7 @@ Everything except `/health` requires `Authorization: Bearer $RELAY_TOKEN`.
 | `POST` | `/teleport` | Pulls a claude.ai cloud session onto this machine. |
 | `POST` | `/cloud/send` | Queues a message into a cloud session. Returns without an answer. |
 | `POST` | `/cloud/ask` | Queues a message into a cloud session **and waits for the answer**, which arrives via the Stop hook. See `hooks/README.md`. |
+| `POST` | `/cloud/start` | Starts a new cloud session with a first task and returns its id, so the phone need not be handed a link. |
 | `POST` | `/cloud/answer` | Where the Stop hook delivers a finished turn. Takes the narrow `RELAY_ANSWER_TOKEN`, and is the one route outside the main auth gate. |
 | `GET` | `/cloud` | Cloud sessions pulled here before. |
 | `POST` | `/cloud/refresh` | Re-pulls one or all of them. |
