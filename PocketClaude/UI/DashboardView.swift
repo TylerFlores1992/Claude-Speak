@@ -83,6 +83,12 @@ struct DashboardView: View {
                 }
                 .task {
                     await loadCloudSessions()
+                    // The workspace pickers in here read `projects`, which the
+                    // dashboard behind this sheet loads. If that load has not
+                    // finished, or failed, the pickers come up silently empty
+                    // and the only option is a default whose name appears
+                    // nowhere. Load it here too rather than inheriting a gap.
+                    if projects.isEmpty { await load() }
                     remoteControl = (try? await viewModel.remoteControlStatus())
                         ?? RelayClient.RemoteControlState(running: false)
                 }
@@ -119,7 +125,7 @@ struct DashboardView: View {
 
                 Section {
                     Picker("Repository", selection: $teleportProject) {
-                        Text("Relay default").tag("")
+                        Text(defaultProjectLabel).tag("")
                         ForEach(projects.filter { $0.available && !$0.isScratch }) { project in
                             Text(project.name).tag(project.name)
                         }
@@ -229,7 +235,7 @@ struct DashboardView: View {
                         .lineLimit(1...4)
 
                     Picker("Repository", selection: $teleportProject) {
-                        Text("Relay default").tag("")
+                        Text(defaultProjectLabel).tag("")
                         ForEach(projects.filter { $0.available && !$0.isScratch }) { project in
                             Text(project.name).tag(project.name)
                         }
@@ -371,6 +377,19 @@ struct DashboardView: View {
             refreshSummary = (error as? LocalizedError)?.errorDescription
                 ?? error.localizedDescription
         }
+    }
+
+    /// What the empty selection is called.
+    ///
+    /// "Relay default" alone is a mystery: it means whichever repository the
+    /// relay is configured for, which is the first code workspace it reports.
+    /// Naming it removes the guess — and when the list has not loaded, the
+    /// label says so rather than looking like the only choice available.
+    private var defaultProjectLabel: String {
+        if let first = projects.first(where: { $0.available && !$0.isScratch }) {
+            return "\(first.name) (relay default)"
+        }
+        return projects.isEmpty ? "Relay default (workspaces not loaded)" : "Relay default"
     }
 
     private var hasCloudLink: Bool {
