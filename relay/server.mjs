@@ -946,9 +946,44 @@ function parseCloudSessionId(input) {
   return text;
 }
 
-/** Arguments for queueing a message into a cloud session. */
-function cloudSendArgs(sessionId, text) {
-  return ["-p", text, "--cloud", sessionId, "--output-format", "json"];
+/**
+ * Arguments for queueing a message into a cloud session.
+ *
+ * The message is *not* here: it goes in on stdin. Passing it as the argument
+ * to -p failed with "Input must be provided either through stdin or as a
+ * prompt argument when using --print", because the relay spawns with stdin
+ * ignored -- which is an empty pipe, not an absent one, so the CLI reads it,
+ * finds nothing, and reports no input. `echo "..." | claude -p --cloud <id>`
+ * is the form the docs give for scripts, and it is the one that matches how
+ * this is spawned.
+ */
+function cloudSendArgs(sessionId) {
+  return ["-p", "--cloud", sessionId, "--output-format", "json"];
+}
+
+/**
+ * Turns a CLI failure into something worth reading.
+ *
+ * The one that matters: `--cloud` refuses to create a session unless it has a
+ * terminal. The relay spawns with piped stdout -- that is how it reads output
+ * -- so creation from here cannot work, and the CLI is right to refuse rather
+ * than silently run the task locally and call it a cloud session.
+ *
+ * There is no way around it from a Windows service: allocating a pseudo-tty
+ * needs a native module, and this relay has no dependencies. So the honest
+ * answer is the workaround, said plainly, rather than a raw stderr dump.
+ */
+function explainCloudFailure(raw) {
+  const text = String(raw ?? "");
+  if (/interactive terminal|requires a tty|run from a TTY/i.test(text)) {
+    return (
+      "The Claude Code CLI will not create a cloud session unless it is run from a terminal, "
+      + "and the relay runs it with piped output. Start the session in the Claude app or at "
+      + "claude.ai/code, then paste its link here -- talking to a session that already exists "
+      + "does work from the relay."
+    );
+  }
+  return text.split("\n").filter(Boolean).slice(-3).join(" ").trim();
 }
 
 /** Arguments for starting a new cloud session with a first task. */
@@ -1313,7 +1348,7 @@ const server = createServer((req, res) => {
           });
         } catch (error) {
           return respond(res, 502, {
-            error: (error.stderr || error.message || "").split("\n").filter(Boolean).slice(-3).join(" ").trim(),
+            error: explainCloudFailure(error.stderr || error.stdout || error.message),
           });
         }
 
@@ -1378,15 +1413,13 @@ const server = createServer((req, res) => {
         const waiting = awaitAnswer(sessionId, Number(body.timeoutMs) || 240_000);
 
         try {
-          execFileSync(CLAUDE_BIN, cloudSendArgs(sessionId, text), {
+          execFileSync(CLAUDE_BIN, cloudSendArgs(sessionId), {
             encoding: "utf8",
             timeout: 60_000,
-            stdio: ["ignore", "pipe", "pipe"],
+            input: text,
           });
         } catch (error) {
-          return respond(res, 502, {
-            error: (error.stderr || error.message || "").split("\n").slice(-3).join(" ").trim(),
-          });
+          return respond(res, 502, { error: explainCloudFailure(error.stderr || error.stdout || error.message) });
         }
 
         const answer = await waiting;
@@ -1414,14 +1447,14 @@ const server = createServer((req, res) => {
 
         let output;
         try {
-          output = execFileSync(CLAUDE_BIN, cloudSendArgs(sessionId, text), {
+          output = execFileSync(CLAUDE_BIN, cloudSendArgs(sessionId), {
             encoding: "utf8",
             timeout: 60_000,
-            stdio: ["ignore", "pipe", "pipe"],
+            input: text,
           });
         } catch (error) {
           return respond(res, 502, {
-            error: (error.stderr || error.message || "").split("\n").slice(-3).join(" ").trim(),
+            error: explainCloudFailure(error.stderr || error.stdout || error.message),
           });
         }
         const parsed = (() => {
@@ -1701,5 +1734,6 @@ export {
   parseCloudSessionId,
   cloudSendArgs,
   cloudStartArgs,
+  explainCloudFailure,
   teleportArgs,
 };

@@ -256,6 +256,31 @@ extension RelayClient {
         }
     }
 
+    /// A quick liveness check, used before an operation that would otherwise
+    /// sit for minutes.
+    ///
+    /// Starting a cloud session legitimately takes a while — Anthropic has to
+    /// provision a VM and clone the repository — so its timeout is generous.
+    /// That generosity is miserable when the relay is simply not there: the
+    /// request waits out the whole window before failing. Five seconds against
+    /// `/health` separates "unreachable" from "working on it" immediately.
+    func isReachable() async -> Bool {
+        guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
+            return false
+        }
+        components.path = components.path.hasSuffix("/")
+            ? components.path + "health"
+            : components.path + "/health"
+        guard let url = components.url else { return false }
+
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 5
+        guard let (_, response) = try? await session.data(for: request),
+              let http = response as? HTTPURLResponse
+        else { return false }
+        return (200...299).contains(http.statusCode)
+    }
+
     /// Asks a cloud session and waits for the answer.
     ///
     /// The whole turn runs on Anthropic's infrastructure, in the session you

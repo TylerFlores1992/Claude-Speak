@@ -30,6 +30,7 @@ import {
   parseCloudSessionId,
   cloudSendArgs,
   cloudStartArgs,
+  explainCloudFailure,
   teleportArgs,
 } from "./server.mjs";
 
@@ -715,11 +716,13 @@ test("refuses empty, short, and non-string input", () => {
 });
 
 test("builds the documented cloud and teleport commands", () => {
-  // Order matters: the message is the value of -p, and --output-format json is
-  // what makes the result parseable rather than prose.
+  // The message is absent on purpose: it goes in on stdin. Passing it as the
+  // value of -p failed with "Input must be provided either through stdin or as
+  // a prompt argument", because the relay spawns with stdin ignored -- an
+  // empty pipe rather than an absent one, which the CLI reads and finds empty.
   assert.deepEqual(
-    cloudSendArgs("session_01abcdef2345", "run the tests"),
-    ["-p", "run the tests", "--cloud", "session_01abcdef2345", "--output-format", "json"]
+    cloudSendArgs("session_01abcdef2345"),
+    ["-p", "--cloud", "session_01abcdef2345", "--output-format", "json"]
   );
   assert.deepEqual(teleportArgs("session_01abcdef2345"), ["--teleport", "session_01abcdef2345"]);
 });
@@ -734,11 +737,30 @@ test("starting a cloud session asks for a parseable result", () => {
   assert.equal(cloudStartArgs("--help")[1], "--help");
 });
 
-test("a message that looks like a flag is still a message", () => {
-  // It sits after -p as its value, so it is never parsed as an option.
-  const args = cloudSendArgs("session_01abcdef2345", "--help");
-  assert.equal(args[0], "-p");
-  assert.equal(args[1], "--help");
+test("the TTY refusal is explained rather than dumped", () => {
+  // The relay spawns the CLI with piped output, so --cloud will not create a
+  // session from here at all. The phone needs the workaround, not the stderr.
+  const explained = explainCloudFailure(
+    "Error: --cloud requires an interactive terminal. Non-interactive invocations " +
+      "(piped stdout, --init-only, --sdk-url) run locally and would silently ignore " +
+      "--cloud. Drop --cloud, or run from a TTY."
+  );
+  assert.match(explained, /Claude app or at claude\.ai/);
+  assert.doesNotMatch(explained, /--sdk-url/, "should not repeat the CLI's internals");
+});
+
+test("any other failure keeps its own words", () => {
+  // Only the one known refusal is rewritten; everything else is reported as
+  // the CLI said it, since guessing at unfamiliar errors hides them.
+  assert.equal(explainCloudFailure("fatal: repository not found"), "fatal: repository not found");
+});
+
+test("no message reaches the command line at all", () => {
+  // Which also means a message that looks like a flag cannot be read as one:
+  // it never appears in argv.
+  const args = cloudSendArgs("session_01abcdef2345");
+  assert.ok(!args.includes("--help"));
+  assert.deepEqual(args, ["-p", "--cloud", "session_01abcdef2345", "--output-format", "json"]);
 });
 
 // --- Deleting sessions -----------------------------------------------------

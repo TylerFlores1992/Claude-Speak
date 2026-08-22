@@ -146,6 +146,18 @@ Then, from a cloud session in that repository, ask it anything. The hook fires
 when the turn ends. Run the relay with `RELAY_HOOK_DEBUG=1` set in the cloud
 environment to have the hook explain itself on stderr in the session.
 
+## Sessions are created elsewhere
+
+`claude --cloud "<task>"` will not create a session unless it is run from a
+terminal — it refuses rather than silently running the task locally and calling
+it a cloud session. The relay spawns the CLI with piped output, so creation from
+the relay is not possible.
+
+Create sessions in the Claude app, at claude.ai/code, or by hand in a terminal
+on the relay machine, then give the app the link. Talking to a session that
+already exists is a different code path and is documented as working
+non-interactively.
+
 ## Only the sessions this relay asked
 
 The hook fires at the end of **every** turn in the repository it is committed

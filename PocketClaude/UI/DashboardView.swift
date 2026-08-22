@@ -35,6 +35,11 @@ struct DashboardView: View {
     @State private var refreshSummary: String?
     @State private var newCloudTask = ""
     @State private var isStartingCloud = false
+    /// Kept apart from `sendProblem` on purpose. They were the same value, and
+    /// it was rendered in the "Leave it there" section — so a failure to
+    /// *start* a session appeared somewhere else on the screen, often below the
+    /// fold. Pressing a button and seeing nothing is the result.
+    @State private var startProblem: String?
     @State private var remoteControl = RelayClient.RemoteControlState(running: false)
     @State private var isTogglingRemoteControl = false
     /// Set by a delete swipe; the confirmation dialog acts on it. Deleting is
@@ -83,6 +88,12 @@ struct DashboardView: View {
                 }
                 .task {
                     await loadCloudSessions()
+                    // The workspace pickers in here read `projects`, which the
+                    // dashboard behind this sheet loads. If that load has not
+                    // finished, or failed, the pickers come up silently empty
+                    // and the only option is a default whose name appears
+                    // nowhere. Load it here too rather than inheriting a gap.
+                    if projects.isEmpty { await load() }
                     remoteControl = (try? await viewModel.remoteControlStatus())
                         ?? RelayClient.RemoteControlState(running: false)
                 }
@@ -119,7 +130,7 @@ struct DashboardView: View {
 
                 Section {
                     Picker("Repository", selection: $teleportProject) {
-                        Text("Relay default").tag("")
+                        Text(defaultProjectLabel).tag("")
                         ForEach(projects.filter { $0.available && !$0.isScratch }) { project in
                             Text(project.name).tag(project.name)
                         }
@@ -229,7 +240,7 @@ struct DashboardView: View {
                         .lineLimit(1...4)
 
                     Picker("Repository", selection: $teleportProject) {
-                        Text("Relay default").tag("")
+                        Text(defaultProjectLabel).tag("")
                         ForEach(projects.filter { $0.available && !$0.isScratch }) { project in
                             Text(project.name).tag(project.name)
                         }
@@ -248,6 +259,18 @@ struct DashboardView: View {
                         isStartingCloud
                             || newCloudTask.trimmingCharacters(in: .whitespaces).isEmpty
                     )
+
+                    if isStartingCloud {
+                        Text("Provisioning a machine and cloning the repository. This takes a minute.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    if let startProblem {
+                        Label(startProblem, systemImage: "exclamationmark.triangle.fill")
+                            .font(.footnote)
+                            .foregroundStyle(.orange)
+                    }
                 } header: {
                     Text("Start something new")
                 } footer: {
@@ -324,7 +347,7 @@ struct DashboardView: View {
     }
 
     private func startCloudSession() async {
-        sendProblem = nil
+        startProblem = nil
         isStartingCloud = true
         defer { isStartingCloud = false }
         do {
@@ -339,7 +362,7 @@ struct DashboardView: View {
             viewModel.useCloudSession(session)
             isBringingCloudSession = false
         } catch {
-            sendProblem = (error as? LocalizedError)?.errorDescription
+            startProblem = (error as? LocalizedError)?.errorDescription
                 ?? error.localizedDescription
         }
     }
@@ -371,6 +394,19 @@ struct DashboardView: View {
             refreshSummary = (error as? LocalizedError)?.errorDescription
                 ?? error.localizedDescription
         }
+    }
+
+    /// What the empty selection is called.
+    ///
+    /// "Relay default" alone is a mystery: it means whichever repository the
+    /// relay is configured for, which is the first code workspace it reports.
+    /// Naming it removes the guess — and when the list has not loaded, the
+    /// label says so rather than looking like the only choice available.
+    private var defaultProjectLabel: String {
+        if let first = projects.first(where: { $0.available && !$0.isScratch }) {
+            return "\(first.name) (relay default)"
+        }
+        return projects.isEmpty ? "Relay default (workspaces not loaded)" : "Relay default"
     }
 
     private var hasCloudLink: Bool {
