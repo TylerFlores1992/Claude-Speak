@@ -703,18 +703,24 @@ function awaitAnswer(id, timeoutMs) {
   });
 }
 
-/** True when the request carries either the answer token or the main one. */
+/**
+ * True when the request carries the answer token.
+ *
+ * The answer token and nothing else -- deliberately not RELAY_TOKEN as well,
+ * which it briefly accepted for convenience. This is the one route published to
+ * the public internet through Tailscale Funnel, so the set of credentials that
+ * open it should be the smallest possible, and RELAY_TOKEN is the one that can
+ * run Claude Code on this machine. Accepting it here would mean a leak of the
+ * powerful token also lets a stranger put words in your ear.
+ */
 function authorizedForAnswer(req) {
+  if (!ANSWER_TOKEN) return false;
   const header = req.headers.authorization ?? "";
   const presented = header.startsWith("Bearer ") ? header.slice(7) : "";
   if (!presented) return false;
-  for (const expected of [ANSWER_TOKEN, TOKEN]) {
-    if (!expected) continue;
-    const a = Buffer.from(presented);
-    const b = Buffer.from(expected);
-    if (a.length === b.length && timingSafeEqual(a, b)) return true;
-  }
-  return false;
+  const a = Buffer.from(presented);
+  const b = Buffer.from(ANSWER_TOKEN);
+  return a.length === b.length && timingSafeEqual(a, b);
 }
 
 // Remote Control.
@@ -1169,9 +1175,14 @@ const server = createServer((req, res) => {
         if (!id) return respond(res, 400, { error: "sessionId is required" });
         if (!text.trim()) return respond(res, 400, { error: "text is required" });
         const claimed = deliverAnswer(id, text);
-        // `claimed` says whether anyone was waiting. Reported rather than
-        // hidden: during the first round-trip test it is the difference
-        // between "the hook works" and "the hook works and the phone heard it".
+        // Logged, because the relay window is where this is watched from and
+        // an unlogged POST is indistinguishable from no POST at all. `claimed`
+        // is the interesting half: it separates "the hook reached us" from
+        // "the hook reached us and something was waiting for it".
+        const preview = text.replace(/\s+/g, " ").slice(0, 60);
+        console.log(
+          `answer: ${id} ${text.length} chars ${claimed ? "-> waiting request" : "(buffered)"}\n  ${preview}${text.length > 60 ? "..." : ""}`
+        );
         respond(res, 200, { ok: true, sessionId: id, claimed });
       })
       .catch((error) => respond(res, 400, { error: error.message }));

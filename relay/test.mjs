@@ -331,6 +331,19 @@ try {
     assert.equal(response.status, 401);
   });
 
+  await asyncTest("the main token does not open the answer route", async () => {
+    // This is the only route published to the public internet through Funnel,
+    // so the credentials that open it are kept to the smallest set. RELAY_TOKEN
+    // can run Claude Code on this machine; a leak of it should not also let a
+    // stranger put words in someone's ear.
+    const response = await fetch(`${base}/cloud/answer`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${TOKEN}` },
+      body: JSON.stringify({ sessionId: "session_01ABC", text: "hi" }),
+    });
+    assert.equal(response.status, 401);
+  });
+
   await asyncTest("the narrow answer token is accepted", async () => {
     const response = await fetch(`${base}/cloud/answer`, {
       method: "POST",
