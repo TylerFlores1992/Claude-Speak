@@ -951,6 +951,31 @@ function cloudSendArgs(sessionId, text) {
   return ["-p", text, "--cloud", sessionId, "--output-format", "json"];
 }
 
+/**
+ * Turns a CLI failure into something worth reading.
+ *
+ * The one that matters: `--cloud` refuses to create a session unless it has a
+ * terminal. The relay spawns with piped stdout -- that is how it reads output
+ * -- so creation from here cannot work, and the CLI is right to refuse rather
+ * than silently run the task locally and call it a cloud session.
+ *
+ * There is no way around it from a Windows service: allocating a pseudo-tty
+ * needs a native module, and this relay has no dependencies. So the honest
+ * answer is the workaround, said plainly, rather than a raw stderr dump.
+ */
+function explainCloudFailure(raw) {
+  const text = String(raw ?? "");
+  if (/interactive terminal|requires a tty|run from a TTY/i.test(text)) {
+    return (
+      "The Claude Code CLI will not create a cloud session unless it is run from a terminal, "
+      + "and the relay runs it with piped output. Start the session in the Claude app or at "
+      + "claude.ai/code, then paste its link here -- talking to a session that already exists "
+      + "does work from the relay."
+    );
+  }
+  return text.split("\n").filter(Boolean).slice(-3).join(" ").trim();
+}
+
 /** Arguments for starting a new cloud session with a first task. */
 function cloudStartArgs(task) {
   return ["--cloud", task, "--output-format", "json"];
@@ -1313,7 +1338,7 @@ const server = createServer((req, res) => {
           });
         } catch (error) {
           return respond(res, 502, {
-            error: (error.stderr || error.message || "").split("\n").filter(Boolean).slice(-3).join(" ").trim(),
+            error: explainCloudFailure(error.stderr || error.stdout || error.message),
           });
         }
 
@@ -1384,9 +1409,7 @@ const server = createServer((req, res) => {
             stdio: ["ignore", "pipe", "pipe"],
           });
         } catch (error) {
-          return respond(res, 502, {
-            error: (error.stderr || error.message || "").split("\n").slice(-3).join(" ").trim(),
-          });
+          return respond(res, 502, { error: explainCloudFailure(error.stderr || error.stdout || error.message) });
         }
 
         const answer = await waiting;
@@ -1421,7 +1444,7 @@ const server = createServer((req, res) => {
           });
         } catch (error) {
           return respond(res, 502, {
-            error: (error.stderr || error.message || "").split("\n").slice(-3).join(" ").trim(),
+            error: explainCloudFailure(error.stderr || error.stdout || error.message),
           });
         }
         const parsed = (() => {
@@ -1701,5 +1724,6 @@ export {
   parseCloudSessionId,
   cloudSendArgs,
   cloudStartArgs,
+  explainCloudFailure,
   teleportArgs,
 };

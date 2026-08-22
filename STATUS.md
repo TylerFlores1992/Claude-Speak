@@ -48,6 +48,15 @@ Be honest about these rather than describing them as working:
 
 ## Known dead ends, with the reason
 
+- **Creating a cloud session from the relay.** `claude --cloud "<task>"` refuses
+  unless it has a terminal: "Non-interactive invocations run locally and would
+  silently ignore --cloud." The relay spawns with piped stdout, so this cannot
+  work from it, and allocating a pseudo-tty needs a native module this project
+  has no dependencies for. Sessions are created in the Claude app, at
+  claude.ai/code, or by hand in a real terminal on the relay machine; the app
+  then talks to one by link. `POST /cloud/start` remains, and explains this
+  when it fails.
+
 Do not re-attempt these without new information:
 
 - **Listing cloud sessions.** No API, no non-interactive CLI. `claude agents

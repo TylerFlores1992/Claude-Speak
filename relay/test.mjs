@@ -30,6 +30,7 @@ import {
   parseCloudSessionId,
   cloudSendArgs,
   cloudStartArgs,
+  explainCloudFailure,
   teleportArgs,
 } from "./server.mjs";
 
@@ -732,6 +733,24 @@ test("starting a cloud session asks for a parseable result", () => {
   // The task sits directly after --cloud as its value, so a task that begins
   // with a dash is still a task.
   assert.equal(cloudStartArgs("--help")[1], "--help");
+});
+
+test("the TTY refusal is explained rather than dumped", () => {
+  // The relay spawns the CLI with piped output, so --cloud will not create a
+  // session from here at all. The phone needs the workaround, not the stderr.
+  const explained = explainCloudFailure(
+    "Error: --cloud requires an interactive terminal. Non-interactive invocations " +
+      "(piped stdout, --init-only, --sdk-url) run locally and would silently ignore " +
+      "--cloud. Drop --cloud, or run from a TTY."
+  );
+  assert.match(explained, /Claude app or at claude\.ai/);
+  assert.doesNotMatch(explained, /--sdk-url/, "should not repeat the CLI's internals");
+});
+
+test("any other failure keeps its own words", () => {
+  // Only the one known refusal is rewritten; everything else is reported as
+  // the CLI said it, since guessing at unfamiliar errors hides them.
+  assert.equal(explainCloudFailure("fatal: repository not found"), "fatal: repository not found");
 });
 
 test("a message that looks like a flag is still a message", () => {
