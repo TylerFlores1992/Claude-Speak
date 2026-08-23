@@ -565,8 +565,22 @@ final class ConversationViewModel: ObservableObject {
         for entry in messages {
             append(entry)
         }
-        canPullHistory = !(history?.pulled ?? false)
-        pullPending = history?.pullPending ?? false
+        // Nothing came back at all, which is not the same as a session with
+        // nothing in it. Offering to pull from a relay that could not be
+        // reached would fail on the tap instead of here.
+        guard let history else {
+            canPullHistory = false
+            pullPending = false
+            append(.init(
+                kind: .status,
+                text: "Talking to \(name) on claude.ai, but the relay didn't answer — its history can't be fetched until it does."
+            ))
+            persist()
+            return
+        }
+
+        canPullHistory = !history.pulled
+        pullPending = history.pullPending
 
         append(.init(kind: .status, text: cloudStatusLine(name: name, count: messages.count)))
         persist()
