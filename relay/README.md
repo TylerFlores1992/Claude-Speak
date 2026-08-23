@@ -159,19 +159,14 @@ Everything except `/health` requires `Authorization: Bearer $RELAY_TOKEN`.
 | `POST` | `/sessions/archive` | Hides one from the list. The transcript stays. |
 | `POST` | `/sessions/delete` | Removes the transcript file. Not undoable. |
 | `GET` | `/projects` | Workspaces a new session may run in. |
-| `POST` | `/teleport` | Pulls a claude.ai cloud session onto this machine. |
 | `POST` | `/cloud/send` | Queues a message into a cloud session. Returns without an answer. |
 | `POST` | `/cloud/ask` | Queues a message into a cloud session **and waits for the answer**, which arrives via the Stop hook. See `hooks/README.md`. |
-| `POST` | `/cloud/start` | Starts a new cloud session with a first task and returns its id. Refuses in practice — `--cloud` needs a terminal, and says so. |
 | `POST` | `/cloud/add` | Adds a session to the remembered list from its link, and marks its answers as wanted. |
 | `POST` | `/cloud/forget` | Drops one from the list. The session itself keeps running on claude.ai. |
 | `GET` | `/cloud/transcript?sessionId=` | A session's conversation: the relay's own record, or its real history once pulled. |
 | `POST` | `/cloud/pull` | Asks a session for its own history. Sends no message and starts no turn — it arrives with the next reply. |
 | `POST` | `/cloud/answer` | Where the Stop hook delivers a finished turn. Takes the narrow `RELAY_ANSWER_TOKEN`, and is the one route outside the main auth gate. |
-| `GET` | `/cloud` | Cloud sessions pulled here before. |
-| `POST` | `/cloud/refresh` | Re-pulls one or all of them. |
-| `GET`/`POST` | `/remote-control` | Reports or starts the Remote Control server. |
-| `POST` | `/remote-control/stop` | Stops it. |
+| `GET` | `/cloud` | The cloud sessions this relay knows about. |
 | `POST` | `/update` | `git pull` in the relay checkout, then restart if supervised. |
 
 ### Session titles
@@ -187,18 +182,21 @@ each one spawns a process. It passes `--no-session-persistence`: without that,
 naming a session creates a session, and the titler pollutes the list it exists
 to tidy.
 
-### Cloud sessions and Remote Control
+### Cloud sessions
 
 Sessions in the Claude app's Code tab run on Anthropic's infrastructure. Nothing
-here can see them and no API lists them, so they are reached one at a time:
+here can see them and no API lists them, so they arrive one at a time by link,
+through `/cloud/add`.
 
-- **`/teleport`** runs `claude --teleport <id>`, which pulls the session's
-  branch and full history onto this machine. It becomes an ordinary local
-  session that `/sessions` lists and `/ask` resumes. It is a **copy** — the
-  cloud session keeps running and the two diverge from that moment.
-- **`/cloud/send`** runs `claude -p "…" --cloud <id>`, which queues a message
-  into the session where it already runs and exits. No answer comes back;
-  read it in the Claude app.
+**`/cloud/send`** runs `claude -p --cloud <id>` with the message on stdin, which
+queues it into the session where it already runs and exits. No answer comes back
+that way; read it in the Claude app.
+
+Bringing a session *here* was tried and does not work. `--teleport` resumes an
+existing teleport session, not an arbitrary cloud one: pointed at a real cloud
+session it exits 1 and prints nothing, with or without a terminal. `/teleport`,
+`/cloud/refresh`, `/cloud/start` and the Remote Control routes were removed once
+the hook below made them unnecessary.
 
 **`/cloud/ask`** does what `/cloud/send` does and then waits for the answer,
 which a Stop hook committed to the repository posts back to `/cloud/answer`
@@ -216,22 +214,14 @@ the hook returned. Exact from the moment a session joins the list, and silent
 about anything said before that.
 
 Tapping **History** in the app replaces that with the session's real
-conversation. No API returns a cloud session's messages — and `--teleport` only
-resumes an existing teleport session, not an arbitrary cloud one — but the Stop
-hook runs *inside* the session, where the transcript is on disk and its path is
-handed to the hook. `POST /cloud/pull` leaves a note that the hook collects on
+conversation. No API returns a cloud session's messages, but the Stop hook runs
+*inside* the session, where the transcript is on disk and its path is handed to
+the hook. `POST /cloud/pull` leaves a note that the hook collects on
 its next probe, and the history comes back with the next reply.
 
 So a pull sends no message and starts no turn: nothing about it shows up in the
 conversation on claude.ai. Only plain user and assistant text is sent, never
 tool calls or attachments. See `relay/hooks/README.md`.
-
-For one session visible in two places at once, `/remote-control` starts
-`claude remote-control`, a server that serves local sessions to claude.ai and
-the Claude app. Sessions it serves show a green dot in the phone's dashboard.
-
-Remote Control is a research preview and may report that it is not enabled for
-your account. Run `claude remote-control` by hand once to find out.
 
 ### Safety: why `dontAsk` is the default
 

@@ -9,8 +9,7 @@ account needed; free personal-team signing is enough.
 |---|---|
 | Mac with **Xcode 16 or newer** | The project uses Xcode 16's folder-synchronised groups. If you're on Xcode 15, see [If Xcode won't open the project](#if-xcode-wont-open-the-project). Uploading to App Store Connect needs **Xcode 26+** — Apple rejects builds made with an older SDK. |
 | iPhone running **iOS 17 or newer** | Plus a Lightning/USB-C cable for the first install. |
-| An **Anthropic API key** | [console.anthropic.com](https://console.anthropic.com) → API Keys. |
-| A **GitHub personal access token** | See [Making the GitHub token](#making-the-github-token) below. |
+| A **relay machine** | Any machine that stays awake with a checkout on it and the Claude Code CLI signed in. It answers every question; the phone only asks. See [`relay/README.md`](relay/README.md). |
 | AirPods (optional) | Any Bluetooth headset works; AirPods just make the pocket case pleasant. |
 
 ---
@@ -52,17 +51,30 @@ Grant the microphone and speech-recognition prompts when they appear.
 > Keychain and app container, not the build. A paid account ($99/yr) extends this
 > to a year.
 
-## 3. Add your keys
+## 3. Point it at the relay
 
-Tap the **gear** icon in the app.
+Set the relay up first — **[`relay/README.md`](relay/README.md)** covers the
+server, Tailscale, and the safety defaults. Before any of that, run this on the
+machine you would use; if it prints a real answer, the rest is plumbing:
 
-- **Anthropic API key** → paste → **Save**
-- **GitHub token** → paste → **Save**
-- **Repository** → `owner/repo`, e.g. `tylerflores1992/camphawk`
+```bash
+claude -p "What does the hold lifecycle code do?" --output-format json | jq -r '.result'
+```
 
-Both keys go straight into the iOS Keychain. The field clears itself after
-saving, and there is no way to read a saved key back out of the UI — if you need
-to change one, paste a new value and save again.
+The relay prints a `pocketclaude://` pairing link when it starts. Open it on the
+phone and the address and token are filled in for you.
+
+To do it by hand, tap the **gear** icon:
+
+- **Relay address** → e.g. `http://mini-pc:8788`
+- **Relay token** → the value of `RELAY_TOKEN` on the relay → **Save**
+
+The token goes straight into the iOS Keychain. The field clears itself after
+saving and there is no way to read it back out of the UI — to change it, paste a
+new value and save again.
+
+There is nothing else to configure. The repository lives on the relay, so the
+phone never needs to know which one you are working in.
 
 ## 4. Talk to it
 
@@ -73,77 +85,15 @@ Put an AirPod in. Hold the big button, say:
 Release. You'll see the tools it calls scroll past on screen, then hear a short
 spoken answer with the full detail on screen behind the **Detail** disclosure.
 
-Try a write, too:
+### Talking to a cloud session
 
-> "Draft a fix for the offered-to-requested hold decline path and open a PR."
+Open a session at [claude.ai/code](https://claude.ai/code), copy its link, and
+paste it into **+** on the Sessions screen. It becomes a row you can tap into and
+ask by voice — the same conversation stays open in the Claude app.
 
-It will read out something like *"Create the branch fix slash hold decline.
-Confirm?"* — say **"confirm"** (hold the button) or tap **Confirm**. Nothing is
-written to GitHub until you do.
-
----
-
-## Free mode: the relay (optional)
-
-The steps above use the **Direct API** backend, billed to your Anthropic API key
-per token. There is a second backend that costs nothing per question and can do
-considerably more.
-
-**Settings → Backend → Relay (Claude Code)** points the app at a small server on
-a machine you own, which runs the Claude Code CLI against a real checkout. The
-CLI authenticates with your Claude subscription rather than an API key, so
-there's no per-question charge — and because it has a shell, it can run your
-tests and builds, not just read files.
-
-| | Direct API | Relay |
-|---|---|---|
-| Cost | Per token | Free (your subscription) |
-| Can | Read, open PRs | Read, edit, **run tests**, build, `git log` |
-| Needs | A signal | The relay machine awake and reachable |
-
-Full setup — the server, Tailscale, systemd, and the safety defaults — is in
-**[`relay/README.md`](relay/README.md)**. Before setting any of it up, run this
-on the machine you'd use; if it prints a real answer, the rest is plumbing:
-
-```bash
-claude -p "What does the hold lifecycle code do?" --output-format json | jq -r '.result'
-```
-
-Both backends stay installed. Switch between them in Settings — relay at home,
-Direct API when the machine is off.
-
----
-
-## Making the GitHub token
-
-Use a **fine-grained** token: [github.com/settings/personal-access-tokens/new](https://github.com/settings/personal-access-tokens/new)
-
-- **Repository access**: Only select repositories → pick your repo.
-- **Permissions**:
-
-| Permission | Set to | Needed for |
-|---|---|---|
-| Contents | **Read-only** | reading files, listing the tree |
-| Metadata | Read-only (automatic) | repo info |
-| Issues | Read-only | listing/reading issues |
-| Pull requests | Read-only | listing/reading PRs |
-
-That's everything for read-only use. If you want Claude to be able to open PRs,
-upgrade two of them:
-
-| Permission | Set to |
-|---|---|
-| Contents | **Read and write** |
-| Pull requests | **Read and write** |
-| Issues | Read and write (only if you want it filing issues) |
-
-A classic token with the `repo` scope also works and is quicker to make, but it
-grants access to every repository you can see — the fine-grained one is worth the
-extra minute.
-
-**Note on code search:** GitHub's code search API indexes the repository's
-default branch and can lag recent pushes. If Claude says it can't find something
-you know is there, ask it to list the directory and read the file directly.
+For its answers to come back, that repository needs the Stop hook installed:
+**[`relay/hooks/README.md`](relay/hooks/README.md)**. With the hook in place,
+**History** also brings the session's own conversation over for reference.
 
 ---
 
@@ -314,12 +264,11 @@ and `PocketClaudeTests/` folders in with *Create groups* checked, and set
 
 | Symptom | Cause / fix |
 |---|---|
-| "No Anthropic API key" | Key not saved yet, or saved to a different install. Re-enter it in Settings. |
-| "GitHub HTTP 403: Resource not accessible by personal access token" | The token's permissions are too narrow, or the repo isn't in its *Selected repositories* list. |
-| "GitHub HTTP 404" on a repo you own | Fine-grained token that doesn't include this repository. |
+| "Can't reach the relay" | The relay machine is asleep, the address is wrong, or Tailscale is disconnected. `curl http://<relay>:8788/health` from the phone's network. |
+| Relay answers but a cloud session never does | The Stop hook is missing from that repository, or its branch has an old copy. See [`relay/hooks/README.md`](relay/hooks/README.md). |
+| Sessions list is empty | Nothing on the relay yet, and no cloud sessions added. Paste a claude.ai link into **+**. |
 | Button does nothing, no listening state | Microphone or speech permission denied. iOS Settings → PocketClaude. |
 | Nothing is spoken but text appears | Silent switch, volume, or the audio route went to the phone speaker. Check the Now Playing route. |
 | ElevenLabs silent | The app falls back to the system voice on failure and shows the error in Settings; check the key and voice ID. |
-| Answers cut off mid-sentence | `max_tokens` too low for the effort level. Raise it in Settings (thinking counts against it). |
-| Very slow answers | Effort is `high` by default. `medium` is a good trade for quick questions. |
+| Very slow answers | Effort is `high` by default. `medium` is a good trade for quick questions — the chip is on the composer. |
 | App won't launch after a week | Free-signing expiry. Re-run from Xcode (⌘R). |

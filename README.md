@@ -7,18 +7,20 @@ answer. Or tap your wrist and talk, with the phone locked and in a bag.
 Personal use only. Never going to the App Store, so it does things an
 App Store app could not.
 
-## Two backends
+## How it answers
 
-The app can answer from either of two places, chosen in Settings.
+Everything goes through a relay: a Node script on a machine you own, running the
+Claude Code CLI against a real checkout. It costs nothing per question — the CLI
+uses your Claude subscription — and it can read files, run tests, and edit code.
+It needs that machine awake and reachable, normally over Tailscale.
 
-**Relay (the one worth using).** A ~1,300-line Node script on a machine you own
-runs the Claude Code CLI against a real checkout. It costs nothing per question
-— the CLI uses your Claude subscription — and it can read files, run tests, and
-edit code. Requires that machine awake and reachable, normally over Tailscale.
+Questions go to one of two places, both through the relay. Your own machine, or
+a **cloud session** on claude.ai — the same conversation that is open in the
+Claude app, which the relay drives by courier while the work runs on Anthropic's
+infrastructure.
 
-**Direct API.** Calls Anthropic straight from the phone, billed per token to an
-API key. Works anywhere with a signal, but can only read the repository and open
-pull requests through the GitHub REST API — no shell, no test runner.
+The app used to also call Anthropic directly from the phone with an API key.
+That is gone: one lane, one place to configure, nothing to choose between.
 
 ```
    watch ──record──▶ phone ──┐
@@ -36,10 +38,9 @@ pull requests through the GitHub REST API — no shell, no test runner.
   archive or delete. A green dot marks sessions running right now.
 - **Sessions get named** — a small model titles each one, cached forever, so the
   list is not sixty rows of the first question truncated.
-- **Cloud sessions** — bring one from claude.ai onto the relay machine with
-  `--teleport`, or queue a message into one where it already runs.
-- **Watch live** — start Remote Control on the relay so claude.ai and the Claude
-  app can watch the same session the phone is driving.
+- **Cloud sessions** — paste a claude.ai link and talk to that session by
+  voice. **History** brings its conversation over for reference, read out of the
+  session by a Stop hook committed to the repository.
 - **Model and effort** from the composer, per question.
 - **Update the relay from the phone**, when it runs under `relay/run.ps1`.
 
@@ -77,7 +78,7 @@ Zero third-party dependencies, in the app and in the relay.
 
 | Path | What lives there |
 |---|---|
-| `PocketClaude/Relay/` | Relay client — SSE reader, sessions, cloud, Remote Control |
+| `PocketClaude/Relay/` | Relay client — SSE reader, sessions, cloud sessions |
 | `PocketClaude/Voice/` | Speech in and out, audio session, wake word, cues |
 | `PocketClaude/UI/` | Dashboard, conversation, settings, Markdown rendering |
 | `PocketClaude/Anthropic/` | Direct-API client, system prompt, response parser |
