@@ -133,62 +133,79 @@ struct ConversationScreen: View {
                 .onSubmit(sendTyped)
 
             HStack(spacing: 8) {
-                repeatButton
+                // The controls scroll; the send button does not. With the
+                // keyboard up there is one more button and less room, and a
+                // plain HStack answers that by squashing what it holds --
+                // "Pulling" wrapped onto two lines and the model chip
+                // truncated to "Op...". Scrolling is the honest response to
+                // not fitting: everything keeps its real size and the row
+                // moves instead.
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        repeatButton
 
-                if isComposerFocused {
-                    Button { isComposerFocused = false } label: {
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 15, weight: .semibold))
-                            .frame(width: 34, height: 34)
-                            .background(Color.pcIconWell, in: Circle())
-                            .foregroundStyle(.primary)
-                    }
-                    .accessibilityLabel("Hide the keyboard")
-                    .transition(.scale.combined(with: .opacity))
-                }
-
-                // Only in a cloud session, and only while there is history
-                // left to bring over. Once the conversation is on screen there
-                // is nothing more to fetch, and a button that repeats what it
-                // already did is the kind of thing you tap twice wondering
-                // whether it worked.
-                if !viewModel.activeCloudSessionID.isEmpty, viewModel.canPullHistory {
-                    Button {
-                        Task { await viewModel.pullCloudHistory() }
-                    } label: {
-                        HStack(spacing: 5) {
-                            Image(systemName: viewModel.pullPending
-                                ? "clock.arrow.circlepath"
-                                : "arrow.down.circle")
-                                .font(.caption2)
-                            Text(viewModel.pullPending ? "Pulling" : "History")
-                                .font(.subheadline.weight(.medium))
+                        if isComposerFocused {
+                            Button { isComposerFocused = false } label: {
+                                Image(systemName: "chevron.down")
+                                    .font(.system(size: 15, weight: .semibold))
+                                    .frame(width: 34, height: 34)
+                                    .background(Color.pcIconWell, in: Circle())
+                                    .foregroundStyle(.primary)
+                            }
+                            .accessibilityLabel("Hide the keyboard")
+                            .transition(.scale.combined(with: .opacity))
                         }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 9)
-                        .background(Color.pcIconWell, in: Capsule())
-                        .foregroundStyle(.primary)
-                    }
-                    .disabled(viewModel.pullPending)
-                    .accessibilityLabel(viewModel.pullPending
-                        ? "History requested. It arrives with the next reply."
-                        : "Bring this session's conversation over from claude.ai for reference.")
-                }
 
-                ChipMenu(title: modelChipTitle, systemImage: "sparkle") {
-                    Picker("Model", selection: $settings.model) {
-                        ForEach(AppSettings.Model.allCases) { model in
-                            Text(model.displayName).tag(model)
+                        // Only in a cloud session, and only while there is history
+                        // left to bring over. Once the conversation is on screen there
+                        // is nothing more to fetch, and a button that repeats what it
+                        // already did is the kind of thing you tap twice wondering
+                        // whether it worked.
+                        if !viewModel.activeCloudSessionID.isEmpty, viewModel.canPullHistory {
+                            Button {
+                                Task { await viewModel.pullCloudHistory() }
+                            } label: {
+                                HStack(spacing: 5) {
+                                    Image(systemName: viewModel.pullPending
+                                        ? "clock.arrow.circlepath"
+                                        : "arrow.down.circle")
+                                        .font(.caption2)
+                                    Text(viewModel.pullPending ? "Pulling" : "History")
+                                        .font(.subheadline.weight(.medium))
+                                        .lineLimit(1)
+                                        // Or it wraps to "Pullin / g" when the
+                                        // row is short of room.
+                                        .fixedSize(horizontal: true, vertical: false)
+                                }
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 9)
+                                .background(Color.pcIconWell, in: Capsule())
+                                .foregroundStyle(.primary)
+                            }
+                            .disabled(viewModel.pullPending)
+                            .accessibilityLabel(viewModel.pullPending
+                                ? "History requested. It arrives with the next reply."
+                                : "Bring this session's conversation over from claude.ai for reference.")
+                        }
+
+                        ChipMenu(title: modelChipTitle, systemImage: "sparkle") {
+                            Picker("Model", selection: $settings.model) {
+                                ForEach(AppSettings.Model.allCases) { model in
+                                    Text(model.displayName).tag(model)
+                                }
+                            }
+                            Picker("Effort", selection: $settings.effort) {
+                                ForEach(AppSettings.Effort.allCases) { effort in
+                                    Text(effort.displayName).tag(effort)
+                                }
+                            }
                         }
                     }
-                    Picker("Effort", selection: $settings.effort) {
-                        ForEach(AppSettings.Effort.allCases) { effort in
-                            Text(effort.displayName).tag(effort)
-                        }
-                    }
+                    // A capsule flush against the clip edge looks shaved.
+                    .padding(.vertical, 1)
                 }
-
-                Spacer(minLength: 0)
+                // No rubber-banding when it all fits already.
+                .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
 
                 // The send arrow replaces the microphone only while there is
                 // something typed. Two always-visible buttons that both mean

@@ -65,6 +65,24 @@ final class WatchRecorder: NSObject, ObservableObject {
         }
     }
 
+    /// Throws the take away without sending it.
+    ///
+    /// The recording is deleted rather than kept: a discarded take is one you
+    /// said something wrong in, and leaving those on the watch is the opposite
+    /// of what cancelling means.
+    func cancel() {
+        guard let recorder, isRecording else { return }
+        recorder.stop()
+        self.recorder = nil
+        isRecording = false
+        try? AVAudioSession.sharedInstance().setActive(false)
+        if let url = destination {
+            try? FileManager.default.removeItem(at: url)
+        }
+        destination = nil
+        problem = nil
+    }
+
     /// Stops and returns the file, or nil if nothing usable was captured.
     func stop() -> URL? {
         guard let recorder, isRecording else { return nil }

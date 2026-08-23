@@ -55,6 +55,13 @@ extension PhoneLink: WCSessionDelegate {
         }
 
         Task { @MainActor in
+            // Same reason as the recording path: answering takes longer than a
+            // backgrounded app is given, and being suspended mid-turn surfaces
+            // as a lost network connection.
+            let lifeline = BackgroundLifeline()
+            lifeline.begin()
+            defer { lifeline.end() }
+
             guard let handler = onQuestion else {
                 replyHandler(["error": "The app wasn't ready."])
                 return
@@ -80,7 +87,16 @@ extension PhoneLink: WCSessionDelegate {
         }
 
         Task { @MainActor in
-            defer { try? FileManager.default.removeItem(at: copy) }
+            // Held for the whole thing, not just the request. The phone is
+            // locked and this app was launched in the background to do it; the
+            // moment iOS suspends us the relay connection dies and the watch
+            // is told the network connection was lost.
+            let lifeline = BackgroundLifeline()
+            lifeline.begin()
+            defer {
+                lifeline.end()
+                try? FileManager.default.removeItem(at: copy)
+            }
 
             let heard: String
             do {

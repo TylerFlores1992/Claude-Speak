@@ -161,7 +161,8 @@ Everything except `/health` requires `Authorization: Bearer $RELAY_TOKEN`.
 | `POST` | `/sessions/rename` | Names one by hand. An empty name restores the default. |
 | `GET` | `/projects` | Workspaces a new session may run in. |
 | `POST` | `/cloud/send` | Queues a message into a cloud session. Returns without an answer. |
-| `POST` | `/cloud/ask` | Queues a message into a cloud session **and waits for the answer**, which arrives via the Stop hook. See `hooks/README.md`. |
+| `POST` | `/cloud/ask` | Queues a message into a cloud session and waits one hop for the answer, which arrives via the Stop hook. See `hooks/README.md`. |
+| `POST` | `/cloud/await` | Waits for an answer without sending anything. How the phone keeps waiting past one hop. |
 | `POST` | `/cloud/add` | Adds a session to the remembered list from its link, and marks its answers as wanted. |
 | `POST` | `/cloud/forget` | Drops one from the list. The session itself keeps running on claude.ai. |
 | `POST` | `/cloud/rename` | Names one in this list. The session on claude.ai is untouched. |
@@ -212,6 +213,25 @@ which a Stop hook committed to the repository posts back to `/cloud/answer`
 from inside the cloud session. That closes a loop that runs entirely in
 Anthropic's cloud, in the session you can watch in the Claude app, with this
 machine acting only as courier. Setup is in [`hooks/README.md`](hooks/README.md).
+
+### Waiting for an answer
+
+A cloud turn can run for many minutes. One HTTP request cannot: the socket
+times out, the answer arrives afterwards, and the phone reports that the
+network connection was lost while this relay is sitting on a perfectly good
+answer.
+
+So the phone sends once and then waits in hops. `/cloud/ask` sends and waits
+one hop; `/cloud/await` waits another, and another, without sending anything.
+Each hop is short enough to live inside any client timeout, and an answer that
+lands between two hops goes to the inbox, where the next hop collects it. A
+dropped hop costs the hop and nothing else.
+
+Hops are clamped to ninety seconds so a stuck client cannot pin a socket open.
+
+An answer nobody ever collects is discarded when the next question arrives:
+the inbox is drained at the start of every wait, so leaving it there would hand
+the previous turn's answer to a question it has never seen.
 
 ### What a transcript is, and is not
 

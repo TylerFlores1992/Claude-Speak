@@ -230,7 +230,8 @@ function sse(res, event, payload) {
 // permissions" must not be reachable by typing it into a picker.
 const ALLOWED_MODELS = new Set([
   "opus", "sonnet", "haiku", "fable",
-  "claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5",
+  "claude-fable-5", "claude-opus-5", "claude-opus-4-8",
+  "claude-sonnet-5", "claude-haiku-4-5",
 ]);
 const ALLOWED_EFFORTS = new Set(["low", "medium", "high", "xhigh", "max"]);
 
@@ -708,6 +709,20 @@ function wantsHistory(id) {
 function clearHistoryWant(id) {
   const key = normalizeCloudId(id);
   if (key) historyWanted.delete(key);
+}
+
+/**
+ * Throws away an answer nobody collected.
+ *
+ * The inbox exists so an answer that arrives with no listener is not lost. But
+ * a *new* question makes an old uncollected answer worse than nothing: the
+ * next wait drains the inbox first, so the previous turn's answer comes back
+ * instantly, apparently answering something it has never seen.
+ */
+function discardBufferedAnswer(id) {
+  const key = normalizeCloudId(id);
+  if (!key) return false;
+  return answerInbox.delete(key);
 }
 
 /** Hands an answer to whoever is waiting, or holds it for whoever asks next. */
@@ -1448,6 +1463,38 @@ const server = createServer((req, res) => {
     return;
   }
 
+  // Waits for an answer without sending anything.
+  //
+  // A cloud turn can run for many minutes, and holding one HTTP request open
+  // for the whole of it does not work: the phone's socket times out, the
+  // answer arrives afterwards, and the person is told the network connection
+  // was lost while the relay is sitting on a perfectly good answer.
+  //
+  // So the phone sends once and then waits in short hops. Each hop is a
+  // request that lives well inside any timeout, and the inbox means an answer
+  // that lands between two hops is still there when the next one asks.
+  if (req.method === "POST" && req.url === "/cloud/await") {
+    readJSON(req)
+      .then(async (body) => {
+        const sessionId = parseCloudSessionId(body.sessionId);
+        if (!sessionId) return respond(res, 400, { error: "That doesn't look like a cloud session id." });
+
+        // Bounded so a stuck phone cannot pin a socket open indefinitely, and
+        // short enough that every hop finishes inside a client timeout.
+        const asked = Number(body.timeoutMs);
+        const waitMs = Math.min(Math.max(Number.isFinite(asked) ? asked : 60_000, 1_000), 90_000);
+
+        markAsked(sessionId);
+        const answer = await awaitAnswer(sessionId, waitMs);
+        // `waiting: true` is not a failure -- it means ask again. Only the
+        // phone knows how long it is prepared to keep waiting.
+        if (answer === null) return respond(res, 200, { sessionId, answer: null, waiting: true });
+        respond(res, 200, { sessionId, answer });
+      })
+      .catch((error) => respond(res, 400, { error: error.message }));
+    return;
+  }
+
   if (req.method === "POST" && req.url === "/cloud/ask") {
     readJSON(req)
       .then(async (body) => {
@@ -1469,6 +1516,11 @@ const server = createServer((req, res) => {
         markAsked(sessionId);
         rememberCloudSession(sessionId, { title: firstLine(text) });
         appendTranscript(sessionId, "user", text);
+        // Anything still sitting in the inbox answers a question that is no
+        // longer the one being asked.
+        if (discardBufferedAnswer(sessionId)) {
+          console.log(`ask: ${sessionId} dropped an uncollected answer from a previous turn`);
+        }
         const waiting = awaitAnswer(sessionId, Number(body.timeoutMs) || 240_000);
 
         try {
@@ -1828,6 +1880,7 @@ export {
   parseLiveIds,
   normalizeCloudId,
   deliverAnswer,
+  discardBufferedAnswer,
   awaitAnswer,
   markAsked,
   wasAsked,

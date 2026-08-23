@@ -283,25 +283,82 @@ extension RelayClient {
     /// Not streamed, unlike `ask`: the hook fires once, when the turn is over,
     /// so there is nothing to speak as it arrives. The trade is that the
     /// conversation lives somewhere you can pick it up from any device.
-    func askCloud(sessionID: String, text: String, timeout: TimeInterval = 300) async throws -> String {
-        let json = try await post(
+    /// Asks a cloud session and waits for the answer.
+    ///
+    /// The wait is made of short hops rather than one long request. A cloud
+    /// turn can run for many minutes; a single HTTP request cannot, and when
+    /// its socket died the answer that arrived afterwards was reported as "the
+    /// network connection was lost" while the relay was sitting on it.
+    ///
+    /// Each hop is a request short enough to live inside any timeout, and the
+    /// relay buffers an answer that lands between two of them — so the only
+    /// thing a dropped hop costs is the hop.
+    func askCloud(
+        sessionID: String,
+        text: String,
+        timeout: TimeInterval = 900,
+        onWaiting: (@Sendable (TimeInterval) -> Void)? = nil
+    ) async throws -> String {
+        // One hop's worth of waiting, on both ends. Long enough that a normal
+        // turn finishes inside the first hop; short enough to be well under
+        // any client or proxy timeout.
+        let hop: TimeInterval = 60
+
+        let sent = try await post(
             path: "cloud/ask",
             body: [
                 "sessionId": .string(sessionID),
                 "text": .string(text),
-                // A little under the request timeout, so the relay gives up
-                // and explains before the connection does it wordlessly.
-                "timeoutMs": .number(Double(Int(timeout - 20) * 1000)),
+                "timeoutMs": .number(hop * 1000),
             ],
-            timeout: timeout
+            timeout: hop + 20
+        )
+        // The `error` field on a 200 here only ever says "no answer yet", which
+        // is the normal case for a turn longer than one hop. A real refusal is
+        // a non-2xx and `post` has already thrown by now.
+        if let answer = sent["answer"]?.stringValue, !answer.isEmpty {
+            return answer
+        }
+
+        // Nothing on screen changes while a hop is in flight, and a turn can
+        // run for many minutes. Without this the app looks frozen for exactly
+        // as long as the interesting work takes.
+        let started = Date()
+        let deadline = started.addingTimeInterval(timeout)
+        while Date() < deadline {
+            onWaiting?(Date().timeIntervalSince(started))
+            let json = try await post(
+                path: "cloud/await",
+                body: [
+                    "sessionId": .string(sessionID),
+                    "timeoutMs": .number(hop * 1000),
+                ],
+                timeout: hop + 20
+            )
+            if let answer = json["answer"]?.stringValue, !answer.isEmpty {
+                return answer
+            }
+            if let problem = json["error"]?.stringValue, !problem.isEmpty {
+                throw RelayError.relay(problem)
+            }
+        }
+        throw RelayError.relay(
+            "No answer came back. Either the turn is still running on claude.ai — the answer will be waiting next time you ask — or the Stop hook is not installed on that session's branch."
+        )
+    }
+
+    /// Collects an answer that arrived while nothing was listening.
+    func awaitCloudAnswer(sessionID: String, timeout: TimeInterval = 60) async throws -> String? {
+        let json = try await post(
+            path: "cloud/await",
+            body: ["sessionId": .string(sessionID), "timeoutMs": .number(timeout * 1000)],
+            timeout: timeout + 20
         )
         if let problem = json["error"]?.stringValue, !problem.isEmpty {
             throw RelayError.relay(problem)
         }
-        guard let answer = json["answer"]?.stringValue, !answer.isEmpty else {
-            throw RelayError.emptyResponse
-        }
-        return answer
+        let answer = json["answer"]?.stringValue
+        return (answer?.isEmpty ?? true) ? nil : answer
     }
 
     /// Shared plumbing for the endpoints that post JSON and read JSON back.

@@ -254,3 +254,37 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertEqual(settings.voiceEngine, .system)
     }
 }
+
+// MARK: - Failure messages
+
+/// "The network connection was lost" is what iOS says when it suspends the app
+/// mid-request. Left as-is it sends you to check Wi-Fi and Tailscale, neither
+/// of which was ever the problem.
+final class FailureMessageTests: XCTestCase {
+    @MainActor
+    func testSuspensionIsExplainedRatherThanQuoted() {
+        let message = ConversationViewModel.describe(URLError(.networkConnectionLost))
+        XCTAssertTrue(message.contains("locked"), message)
+        XCTAssertFalse(message.contains("network connection was lost"), message)
+    }
+
+    @MainActor
+    func testAnUnreachableRelayNamesTheRelay() {
+        for code in [URLError.Code.cannotConnectToHost, .cannotFindHost] {
+            let message = ConversationViewModel.describe(URLError(code))
+            XCTAssertTrue(message.contains("relay"), "\(code): \(message)")
+        }
+    }
+
+    @MainActor
+    func testATimeoutSaysTheWorkMayStillBeRunning() {
+        let message = ConversationViewModel.describe(URLError(.timedOut))
+        XCTAssertTrue(message.contains("still"), message)
+    }
+
+    @MainActor
+    func testAnythingElseKeepsItsOwnWords() {
+        let message = ConversationViewModel.describe(RelayError.emptyResponse)
+        XCTAssertEqual(message, RelayError.emptyResponse.errorDescription)
+    }
+}
