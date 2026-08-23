@@ -23,6 +23,8 @@ import {
   deliverAnswer,
   awaitAnswer,
   markAsked,
+  loadTranscript,
+  appendTranscript,
   resolveSessionCwd,
   sessionFilePath,
   parseLiveIds,
@@ -36,6 +38,12 @@ import {
 
 const SERVER = fileURLToPath(new URL("./server.mjs", import.meta.url));
 let failures = 0;
+
+// Everything the relay remembers -- titles, cloud sessions, archived ids,
+// transcripts -- goes in a fresh directory per run. Without this the tests
+// wrote into a real home directory and accumulated across runs, so whether
+// they passed depended on what had been run before.
+process.env.RELAY_STATE_DIR = mkdtempSync(join(tmpdir(), "pocketclaude-state-"));
 
 function test(name, fn) {
   try {
@@ -667,6 +675,42 @@ await asyncTest("an answer matches the question across both id spellings", async
   const waiting = awaitAnswer("session_01SPELL", 500);
   deliverAnswer("cse_01SPELL", "matched");
   assert.equal(await waiting, "matched");
+});
+
+// --- Cloud transcripts -----------------------------------------------------
+//
+// No API returns a cloud session's messages, and --teleport, the only thing
+// that can fetch its history, checks out its branch and makes a diverging copy.
+// So the relay keeps its own record of what passes through: exact from the
+// moment a session joins the list, silent about anything before it.
+
+test("a transcript records both sides in order", () => {
+  appendTranscript("session_01TR", "user", "what does this do");
+  appendTranscript("session_01TR", "assistant", "It monitors campsites.");
+  const entries = loadTranscript("session_01TR");
+  assert.deepEqual(entries.map((e) => e.role), ["user", "assistant"]);
+  assert.equal(entries[1].text, "It monitors campsites.");
+});
+
+test("a transcript is found under either id spelling", () => {
+  assert.equal(loadTranscript("cse_01TR").length, 2);
+});
+
+test("empty text is not recorded", () => {
+  const before = loadTranscript("session_01TR").length;
+  appendTranscript("session_01TR", "user", "   ");
+  appendTranscript("session_01TR", "user", "");
+  assert.equal(loadTranscript("session_01TR").length, before);
+});
+
+test("a transcript cannot be read or written outside its directory", () => {
+  // The id is validated before it reaches here, but this builds a path from
+  // it, so it is checked again rather than trusted twice removed.
+  for (const attempt of ["../../etc/passwd", "a/b", "..", ""]) {
+    assert.deepEqual(loadTranscript(attempt), [], `read ${attempt}`);
+    appendTranscript(attempt, "user", "should not be written");
+    assert.deepEqual(loadTranscript(attempt), [], `wrote ${attempt}`);
+  }
 });
 
 // --- Cloud sessions --------------------------------------------------------

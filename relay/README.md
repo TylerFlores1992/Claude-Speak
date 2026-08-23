@@ -145,6 +145,7 @@ a machine that was set up by hand.
 | `RELAY_SUPERVISED` | *(set by `run.ps1`)* | Tells the relay a supervisor exists, so an update may exit to restart. |
 | `RELAY_ANSWER_TOKEN` | *(none)* | Narrow token for `/cloud/answer` only. Without it, cloud answers are refused. See `hooks/README.md`. |
 | `RELAY_ANSWER_ALL` | `0` | Accept answers from every cloud session, not only ones this relay asked. |
+| `RELAY_STATE_DIR` | `~/.pocketclaude` | Where titles, remembered cloud sessions, archived ids, and transcripts are kept. |
 
 ### Endpoints
 
@@ -161,7 +162,10 @@ Everything except `/health` requires `Authorization: Bearer $RELAY_TOKEN`.
 | `POST` | `/teleport` | Pulls a claude.ai cloud session onto this machine. |
 | `POST` | `/cloud/send` | Queues a message into a cloud session. Returns without an answer. |
 | `POST` | `/cloud/ask` | Queues a message into a cloud session **and waits for the answer**, which arrives via the Stop hook. See `hooks/README.md`. |
-| `POST` | `/cloud/start` | Starts a new cloud session with a first task and returns its id, so the phone need not be handed a link. |
+| `POST` | `/cloud/start` | Starts a new cloud session with a first task and returns its id. Refuses in practice — `--cloud` needs a terminal, and says so. |
+| `POST` | `/cloud/add` | Adds a session to the remembered list from its link, and marks its answers as wanted. |
+| `POST` | `/cloud/forget` | Drops one from the list. The session itself keeps running on claude.ai. |
+| `GET` | `/cloud/transcript?sessionId=` | What the relay has seen pass through a session. Not its full history — see below. |
 | `POST` | `/cloud/answer` | Where the Stop hook delivers a finished turn. Takes the narrow `RELAY_ANSWER_TOKEN`, and is the one route outside the main auth gate. |
 | `GET` | `/cloud` | Cloud sessions pulled here before. |
 | `POST` | `/cloud/refresh` | Re-pulls one or all of them. |
@@ -200,6 +204,17 @@ which a Stop hook committed to the repository posts back to `/cloud/answer`
 from inside the cloud session. That closes a loop that runs entirely in
 Anthropic's cloud, in the session you can watch in the Claude app, with this
 machine acting only as courier. Setup is in [`hooks/README.md`](hooks/README.md).
+
+### What a transcript is, and is not
+
+No API returns a cloud session's messages, and `--teleport` — the only thing
+that can fetch its history — checks out its branch and makes a diverging copy,
+which is far too much for showing what was said.
+
+So the relay keeps its own record: every question it sends and every answer the
+hook returns, in `RELAY_STATE_DIR/transcripts/`. Exact from the moment a session
+joins the list, and silent about anything said before that. The app says so on
+screen rather than implying it is showing the whole conversation.
 
 For one session visible in two places at once, `/remote-control` starts
 `claude remote-control`, a server that serves local sessions to claude.ai and
