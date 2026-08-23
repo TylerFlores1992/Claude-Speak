@@ -14,16 +14,20 @@ struct DashboardView: View {
     @ObservedObject var viewModel: ConversationViewModel
 
     @State private var sessions: [RelaySession] = []
-    @State private var projects: [RelayProject] = []
     @State private var query = ""
     @State private var isLoading = false
     @State private var loadError: String?
-    @State private var isChoosingProject = false
     @State private var cloudSessions: [CloudSession] = []
     /// Set by a delete swipe; the confirmation dialog acts on it. Deleting is
     /// the one action here that cannot be taken back, so it is the one that
     /// asks.
     @State private var sessionPendingDeletion: RelaySession?
+    /// What is being renamed, and what it is being renamed to. Two ids rather
+    /// than one because a cloud session and a relay session are renamed through
+    /// different endpoints, and only one of them can be in flight at a time.
+    @State private var renamingLocalID: String?
+    @State private var renamingCloudID: String?
+    @State private var renameText = ""
     @State private var rowActionProblem: String?
     @State private var isAddingSession = false
     @State private var newSessionLink = ""
@@ -47,7 +51,7 @@ struct DashboardView: View {
     var body: some View {
         ZStack(alignment: .bottom) {
             content
-            newSessionButton
+            newChatButton
         }
         .navigationTitle("Sessions")
         .navigationBarTitleDisplayMode(.inline)
@@ -59,14 +63,6 @@ struct DashboardView: View {
         .refreshable {
             await load()
             await loadCloudSessions()
-        }
-        .confirmationDialog("New session in…", isPresented: $isChoosingProject, titleVisibility: .visible) {
-            ForEach(projects.filter(\.available)) { project in
-                Button(project.isScratch ? "\(project.name) — no repository" : project.name) {
-                    viewModel.startSession(inProject: project.name)
-                }
-            }
-            Button("Cancel", role: .cancel) {}
         }
         .sheet(isPresented: $isAddingSession) { addSessionSheet }
         .toolbar {
@@ -163,19 +159,6 @@ struct DashboardView: View {
         cloudSessions = found
     }
 
-    /// What the empty selection is called.
-    ///
-    /// "Relay default" alone is a mystery: it means whichever repository the
-    /// relay is configured for, which is the first code workspace it reports.
-    /// Naming it removes the guess — and when the list has not loaded, the
-    /// label says so rather than looking like the only choice available.
-    private var defaultProjectLabel: String {
-        if let first = projects.first(where: { $0.available && !$0.isScratch }) {
-            return "\(first.name) (relay default)"
-        }
-        return projects.isEmpty ? "Relay default (workspaces not loaded)" : "Relay default"
-    }
-
     @ViewBuilder
     private var content: some View {
         // Every branch here weighs both lanes. Gating on `sessions` alone meant
@@ -225,7 +208,7 @@ struct DashboardView: View {
                         }
                         .buttonStyle(.plain)
                         .listRowBackground(Color.pcCard)
-                        .swipeActions(edge: .trailing) {
+                        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                             // Removes it from this list only. The session keeps
                             // running on claude.ai and can be added again from
                             // its link, so there is nothing to confirm.
@@ -234,6 +217,13 @@ struct DashboardView: View {
                             } label: {
                                 Label("Remove", systemImage: "minus.circle")
                             }
+
+                            Button {
+                                beginRename(cloud: session)
+                            } label: {
+                                Label("Rename", systemImage: "pencil")
+                            }
+                            .tint(.blue)
                         }
                     }
                 } header: {
@@ -272,6 +262,13 @@ struct DashboardView: View {
                                 Label("Archive", systemImage: "archivebox")
                             }
                             .tint(.orange)
+
+                            Button {
+                                beginRename(local: session)
+                            } label: {
+                                Label("Rename", systemImage: "pencil")
+                            }
+                            .tint(.blue)
                         }
                     }
                 } header: {
@@ -306,6 +303,20 @@ struct DashboardView: View {
             Text("The transcript is removed from the relay machine. This can't be undone — archive instead if you only want it out of the list.")
         }
         .alert(
+            "Rename",
+            isPresented: Binding(
+                get: { renamingLocalID != nil || renamingCloudID != nil },
+                set: { if !$0 { cancelRename() } }
+            )
+        ) {
+            TextField("Name", text: $renameText)
+                .autocorrectionDisabled()
+            Button("Save") { Task { await commitRename() } }
+            Button("Cancel", role: .cancel) { cancelRename() }
+        } message: {
+            Text("Leave it empty to go back to the name it had.")
+        }
+        .alert(
             "That didn't work",
             isPresented: Binding(
                 get: { rowActionProblem != nil },
@@ -315,6 +326,50 @@ struct DashboardView: View {
             Button("OK", role: .cancel) { rowActionProblem = nil }
         } message: {
             Text(rowActionProblem ?? "")
+        }
+    }
+
+    private func beginRename(local session: RelaySession) {
+        renamingCloudID = nil
+        renamingLocalID = session.id
+        renameText = session.title
+    }
+
+    private func beginRename(cloud session: CloudSession) {
+        renamingLocalID = nil
+        renamingCloudID = session.cloudID
+        renameText = session.title ?? ""
+    }
+
+    private func cancelRename() {
+        renamingLocalID = nil
+        renamingCloudID = nil
+        renameText = ""
+    }
+
+    /// Renames whichever row was swiped, then reloads that list.
+    ///
+    /// Not optimistic, unlike archive and remove. Those take a row away, and a
+    /// row that comes back is obviously a failure; a name that quietly reverts
+    /// looks like a typo you made. So the list is re-read and shows what the
+    /// relay actually stored.
+    private func commitRename() async {
+        let name = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let local = renamingLocalID
+        let cloud = renamingCloudID
+        cancelRename()
+
+        do {
+            if let local {
+                try await viewModel.renameSession(id: local, title: name)
+                await load()
+            } else if let cloud {
+                try await viewModel.renameCloudSession(id: cloud, title: name)
+                await loadCloudSessions()
+            }
+        } catch {
+            rowActionProblem = (error as? LocalizedError)?.errorDescription
+                ?? error.localizedDescription
         }
     }
 
@@ -424,11 +479,19 @@ struct DashboardView: View {
         .contentShape(Rectangle())
     }
 
-    private var newSessionButton: some View {
+    /// Starts a conversation with no repository behind it.
+    ///
+    /// It used to ask which workspace to start in, which was a question with a
+    /// real answer only while the relay was where repository work happened.
+    /// Work with a repository now starts in the Claude app, arrives here as a
+    /// cloud session, and brings its own environment. What is left for the
+    /// relay to start is a chat: somewhere to think out loud, on the scratch
+    /// workspace the relay already keeps for exactly this.
+    private var newChatButton: some View {
         Button {
-            isChoosingProject = true
+            viewModel.startSession(inProject: "Chat")
         } label: {
-            Label("New session", systemImage: "plus")
+            Label("New chat", systemImage: "plus")
                 .font(.body.weight(.semibold))
                 .padding(.horizontal, 20)
                 .padding(.vertical, 14)
@@ -436,16 +499,13 @@ struct DashboardView: View {
                 .foregroundStyle(.black)
         }
         .padding(.bottom, 12)
-        .disabled(projects.isEmpty)
     }
 
     private func load() async {
         isLoading = true
         defer { isLoading = false }
         do {
-            let (found, available) = try await viewModel.relayCatalog()
-            sessions = found
-            projects = available
+            sessions = try await viewModel.relaySessions()
             loadError = nil
         } catch {
             loadError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription

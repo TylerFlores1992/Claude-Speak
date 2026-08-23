@@ -158,11 +158,13 @@ Everything except `/health` requires `Authorization: Bearer $RELAY_TOKEN`.
 | `GET` | `/sessions` | Every Claude Code session on the machine, newest first, with a `live` flag. |
 | `POST` | `/sessions/archive` | Hides one from the list. The transcript stays. |
 | `POST` | `/sessions/delete` | Removes the transcript file. Not undoable. |
+| `POST` | `/sessions/rename` | Names one by hand. An empty name restores the default. |
 | `GET` | `/projects` | Workspaces a new session may run in. |
 | `POST` | `/cloud/send` | Queues a message into a cloud session. Returns without an answer. |
 | `POST` | `/cloud/ask` | Queues a message into a cloud session **and waits for the answer**, which arrives via the Stop hook. See `hooks/README.md`. |
 | `POST` | `/cloud/add` | Adds a session to the remembered list from its link, and marks its answers as wanted. |
 | `POST` | `/cloud/forget` | Drops one from the list. The session itself keeps running on claude.ai. |
+| `POST` | `/cloud/rename` | Names one in this list. The session on claude.ai is untouched. |
 | `GET` | `/cloud/transcript?sessionId=` | A session's conversation: the relay's own record, or its real history once pulled. |
 | `POST` | `/cloud/pull` | Asks a session for its own history. Sends no message and starts no turn — it arrives with the next reply. |
 | `POST` | `/cloud/answer` | Where the Stop hook delivers a finished turn. Takes the narrow `RELAY_ANSWER_TOKEN`, and is the one route outside the main auth gate. |
@@ -170,6 +172,13 @@ Everything except `/health` requires `Authorization: Bearer $RELAY_TOKEN`.
 | `POST` | `/update` | `git pull` in the relay checkout, then restart if supervised. |
 
 ### Session titles
+
+A name set from the phone is kept in `RELAY_STATE_DIR/names.json`, separate
+from the generated-title cache, and outranks everything: a name you typed is an
+instruction, and a generated title is a guess the relay is free to replace.
+Clearing the name falls back through the same chain as a session that was never
+renamed.
+
 
 A session is otherwise titled with its first question verbatim, which is how a
 list becomes six rows of `What does this proje...`. The relay asks a small model

@@ -457,14 +457,17 @@ final class ConversationViewModel: ObservableObject {
         session.relaySessionID == nil ? activeProject : ""
     }
 
-    /// Sessions and workspaces from the relay, for the dashboard.
-    func relayCatalog() async throws -> ([RelaySession], [RelayProject]) {
+    /// The relay's own sessions, for the dashboard.
+    ///
+    /// Workspaces used to be fetched alongside these, to fill a picker asking
+    /// which one a new session should start in. Nothing asks that any more:
+    /// repository work starts in the Claude app and arrives here as a cloud
+    /// session, and what the relay starts is a chat.
+    func relaySessions() async throws -> [RelaySession] {
         guard let client = RelayClient.make(settings: settings) else {
             throw RelayError.notConfigured
         }
-        async let sessions = client.sessions()
-        async let projects = client.projects()
-        return try await (sessions, projects)
+        return try await client.sessions()
     }
 
     /// Hides a session from the dashboard without touching its transcript.
@@ -473,6 +476,25 @@ final class ConversationViewModel: ObservableObject {
             throw RelayError.notConfigured
         }
         try await client.archiveSession(id: id)
+    }
+
+    /// Renames a session on the relay machine. An empty name restores the default.
+    func renameSession(id: String, title: String) async throws {
+        guard let client = RelayClient.make(settings: settings) else {
+            throw RelayError.notConfigured
+        }
+        try await client.renameSession(id: id, title: title)
+    }
+
+    /// Renames a cloud session in the list. The session on claude.ai is untouched.
+    func renameCloudSession(id: String, title: String) async throws {
+        guard let client = RelayClient.make(settings: settings) else {
+            throw RelayError.notConfigured
+        }
+        try await client.renameCloudSession(id: id, title: title)
+        if id == activeCloudSessionID {
+            cloudSessionTitle = title.isEmpty ? nil : title
+        }
     }
 
     /// Deletes a session's transcript on the relay machine. Not undoable.

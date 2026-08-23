@@ -466,6 +466,7 @@ function listSessions({ limit = 60 } = {}) {
   if (!existsSync(root)) return [];
 
   const cached = loadTitles();
+  const names = loadNames();
   // Older local copies of a cloud session that has since been re-teleported.
   // Without this every refresh leaves another row behind, all titled the same.
   const superseded = supersededLocalIds();
@@ -501,11 +502,13 @@ function listSessions({ limit = 60 } = {}) {
         projectPath: cwd || projectDir.name,
         updatedAt: stat.mtime.toISOString(),
         bytes: stat.size,
-        // Order matters: a title you set by hand outranks a generated one,
-        // which outranks the raw first question.
-        title: head.hasExplicitTitle
-          ? head.title
-          : cached[entry.replace(/\.jsonl$/, "")] ?? head.title,
+        // Order matters: a name set from the phone outranks a title set with
+        // /rename in the session, which outranks a generated one, which
+        // outranks the raw first question.
+        title: names[entry.replace(/\.jsonl$/, "")]
+          ?? (head.hasExplicitTitle
+            ? head.title
+            : cached[entry.replace(/\.jsonl$/, "")] ?? head.title),
         hasExplicitTitle: head.hasExplicitTitle,
         firstMessage: head.firstMessage,
       });
@@ -1187,6 +1190,40 @@ const TITLE_PROMPT_PREFIX =
   "the message below. Reply with the title alone: no quotes, no punctuation " +
   "at the end, no explanation.\n\n";
 
+// Names set by hand from the phone.
+//
+// Kept apart from the generated-title cache because they mean something
+// different: the cache is a guess the relay is free to replace, and this is an
+// instruction it is not. Separate files also means the titler can go on
+// filling the cache without ever needing to know which rows are spoken for.
+function namesPath() {
+  return join(stateDir(), "names.json");
+}
+
+function loadNames() {
+  try {
+    const parsed = JSON.parse(readFileSync(namesPath(), "utf8"));
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveNames(names) {
+  try {
+    mkdirSync(dirname(namesPath()), { recursive: true });
+    writeFileSync(namesPath(), JSON.stringify(names, null, 2));
+  } catch {
+    // A lost name costs a row its label, never an answer.
+  }
+}
+
+/** Trims and bounds a name typed on a phone. Empty means "go back to the default". */
+function cleanName(value) {
+  if (typeof value !== "string") return "";
+  return value.replace(/\s+/g, " ").trim().slice(0, 80);
+}
+
 function loadTitles() {
   try {
     const parsed = JSON.parse(readFileSync(titlesPath(), "utf8"));
@@ -1543,7 +1580,62 @@ const server = createServer((req, res) => {
           delete titles[id];
           saveTitles(titles);
         }
+        const names = loadNames();
+        if (names[id]) {
+          delete names[id];
+          saveNames(names);
+        }
         respond(res, 200, { ok: true, deleted: id });
+      })
+      .catch((error) => respond(res, 400, { error: error.message }));
+    return;
+  }
+
+  // Renames a session on this machine. An empty name puts the default back.
+  if (req.method === "POST" && req.url === "/sessions/rename") {
+    readJSON(req)
+      .then((body) => {
+        const id = typeof body.id === "string" ? body.id.trim() : "";
+        // Resolved against the files that exist, like every other id the phone
+        // sends: it decides which entry of a stored map gets written.
+        if (!sessionFilePath(id)) {
+          return respond(res, 404, { error: "No session with that id on this machine." });
+        }
+        const name = cleanName(body.title);
+        const names = loadNames();
+        if (name) {
+          names[id] = name;
+        } else if (!(id in names)) {
+          return respond(res, 200, { ok: true, id, title: null });
+        } else {
+          delete names[id];
+        }
+        saveNames(names);
+        respond(res, 200, { ok: true, id, title: name || null });
+      })
+      .catch((error) => respond(res, 400, { error: error.message }));
+    return;
+  }
+
+  // Renames a cloud session in this list. The session on claude.ai is
+  // untouched -- this is the label on a row, not its name over there.
+  if (req.method === "POST" && req.url === "/cloud/rename") {
+    readJSON(req)
+      .then((body) => {
+        const sessionId = parseCloudSessionId(body.sessionId);
+        if (!sessionId) return respond(res, 400, { error: "That doesn't look like a cloud session id." });
+        const state = loadCloud();
+        if (!state[sessionId]) {
+          return respond(res, 404, { error: "That session isn't in the list." });
+        }
+        const name = cleanName(body.title);
+        state[sessionId] = {
+          ...state[sessionId],
+          title: name || null,
+          updatedAt: new Date().toISOString(),
+        };
+        saveCloud(state);
+        respond(res, 200, { ok: true, sessionId, title: name || null });
       })
       .catch((error) => respond(res, 400, { error: error.message }));
     return;
@@ -1744,6 +1836,9 @@ export {
   clearHistoryWant,
   replaceTranscript,
   rememberCloudSession,
+  loadNames,
+  saveNames,
+  cleanName,
   loadTranscript,
   appendTranscript,
   parseCloudSessionId,
