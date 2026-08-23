@@ -11,8 +11,15 @@ final class AppSettings: ObservableObject {
     // MARK: - Model configuration
 
     /// Exact model IDs — never construct these by appending date suffixes.
+    /// Ordered most capable first, which is also roughly most expensive first.
+    ///
+    /// The relay allowlists these same ids before they reach a command line, so
+    /// adding one here without adding it there gets the relay's default
+    /// instead — silently, which is the worst way for a picker to fail.
     enum Model: String, CaseIterable, Identifiable {
+        case fable5 = "claude-fable-5"
         case opus5 = "claude-opus-5"
+        case opus48 = "claude-opus-4-8"
         case sonnet5 = "claude-sonnet-5"
         case haiku45 = "claude-haiku-4-5"
 
@@ -20,7 +27,9 @@ final class AppSettings: ObservableObject {
 
         var displayName: String {
             switch self {
+            case .fable5: return "Claude Fable 5"
             case .opus5: return "Claude Opus 5 (default)"
+            case .opus48: return "Claude Opus 4.8"
             case .sonnet5: return "Claude Sonnet 5"
             case .haiku45: return "Claude Haiku 4.5"
             }
@@ -30,7 +39,9 @@ final class AppSettings: ObservableObject {
         /// beside the other controls.
         var shortName: String {
             switch self {
+            case .fable5: return "Fable 5"
             case .opus5: return "Opus 5"
+            case .opus48: return "Opus 4.8"
             case .sonnet5: return "Sonnet 5"
             case .haiku45: return "Haiku 4.5"
             }
@@ -40,7 +51,7 @@ final class AppSettings: ObservableObject {
         /// Haiku 4.5 predates both and rejects them with a 400.
         var supportsAdaptiveThinking: Bool {
             switch self {
-            case .opus5, .sonnet5: return true
+            case .fable5, .opus5, .opus48, .sonnet5: return true
             case .haiku45: return false
             }
         }

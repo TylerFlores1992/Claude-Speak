@@ -55,6 +55,22 @@ struct DashboardView: View {
         }
         .navigationTitle("Sessions")
         .navigationBarTitleDisplayMode(.inline)
+        // Deliberately here rather than beside the rename alert on the list.
+        // SwiftUI presents one alert per view: two `.alert` modifiers on the
+        // same view leave only one of them working, and it was this one --
+        // so tapping Rename opened nothing at all and looked like a dead
+        // button. They are on different views now, and both present.
+        .alert(
+            "That didn't work",
+            isPresented: Binding(
+                get: { rowActionProblem != nil },
+                set: { if !$0 { rowActionProblem = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) { rowActionProblem = nil }
+        } message: {
+            Text(rowActionProblem ?? "")
+        }
         .searchable(text: $query, prompt: "Search sessions")
         .task {
             await load()
@@ -315,17 +331,6 @@ struct DashboardView: View {
             Button("Cancel", role: .cancel) { cancelRename() }
         } message: {
             Text("Leave it empty to go back to the name it had.")
-        }
-        .alert(
-            "That didn't work",
-            isPresented: Binding(
-                get: { rowActionProblem != nil },
-                set: { if !$0 { rowActionProblem = nil } }
-            )
-        ) {
-            Button("OK", role: .cancel) { rowActionProblem = nil }
-        } message: {
-            Text(rowActionProblem ?? "")
         }
     }
 

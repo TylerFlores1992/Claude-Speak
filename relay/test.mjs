@@ -637,6 +637,24 @@ test("aliases and full model names are both accepted", () => {
   }
 });
 
+test("every model the phone can pick is one the relay accepts", () => {
+  // These are the raw values of AppSettings.Model in the iOS app. A model in
+  // the picker that is missing here does not fail: the relay quietly
+  // substitutes its own default, so the chip says one thing and the answer
+  // comes from another. That is the failure this test exists to catch.
+  const inThePicker = [
+    "claude-fable-5",
+    "claude-opus-5",
+    "claude-opus-4-8",
+    "claude-sonnet-5",
+    "claude-haiku-4-5",
+  ];
+  for (const name of inThePicker) {
+    const args = buildArgs({ text: "hi", model: name });
+    assert.equal(args[args.indexOf("--model") + 1], name, `relay would ignore ${name}`);
+  }
+});
+
 test("effort is only sent when asked for", () => {
   assert.equal(buildArgs({ text: "hi" }).indexOf("--effort"), -1);
 });
