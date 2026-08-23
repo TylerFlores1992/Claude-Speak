@@ -327,7 +327,19 @@ struct DashboardView: View {
         ) {
             TextField("Name", text: $renameText)
                 .autocorrectionDisabled()
-            Button("Save") { Task { await commitRename() } }
+            Button("Save") {
+                // Read here, synchronously, and passed in.
+                //
+                // Dismissing the alert runs the `isPresented` setter, which
+                // clears all three — and it does that before a Task scheduled
+                // from this closure gets to run. Reading them inside the Task
+                // found an empty name and no id, so Save went back to the list
+                // having done nothing at all, without even an error.
+                let name = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
+                let local = renamingLocalID
+                let cloud = renamingCloudID
+                Task { await commitRename(name: name, local: local, cloud: cloud) }
+            }
             Button("Cancel", role: .cancel) { cancelRename() }
         } message: {
             Text("Leave it empty to go back to the name it had.")
@@ -354,16 +366,16 @@ struct DashboardView: View {
 
     /// Renames whichever row was swiped, then reloads that list.
     ///
+    /// Takes what it needs as arguments rather than reading it. By the time
+    /// this runs the alert has been dismissed, and dismissal clears the state
+    /// it would have read — so it read an empty name and no id, and renamed
+    /// nothing without so much as an error.
+    ///
     /// Not optimistic, unlike archive and remove. Those take a row away, and a
     /// row that comes back is obviously a failure; a name that quietly reverts
     /// looks like a typo you made. So the list is re-read and shows what the
     /// relay actually stored.
-    private func commitRename() async {
-        let name = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let local = renamingLocalID
-        let cloud = renamingCloudID
-        cancelRename()
-
+    private func commitRename(name: String, local: String?, cloud: String?) async {
         do {
             if let local {
                 try await viewModel.renameSession(id: local, title: name)
