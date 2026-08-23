@@ -9,11 +9,27 @@ import Security
 enum KeychainStore {
     /// One entry per secret. `rawValue` is the Keychain account name.
     enum Key: String, CaseIterable {
-        case anthropicAPIKey = "anthropic.api.key"
-        case githubToken = "github.pat"
         case elevenLabsAPIKey = "elevenlabs.api.key"
         /// Bearer token for your own relay — must match RELAY_TOKEN there.
         case relayToken = "relay.token"
+
+        /// Secrets the app no longer uses.
+        ///
+        /// The direct-API mode that needed these is gone, but a Keychain entry
+        /// outlives the code that wrote it: deleting the cases alone would
+        /// strand a real API key and a real GitHub token on the device with
+        /// nothing left able to name them, let alone remove them.
+        case retiredAnthropicAPIKey = "anthropic.api.key"
+        case retiredGitHubToken = "github.pat"
+    }
+
+    /// Deletes the secrets that no longer have a feature behind them.
+    ///
+    /// Runs at every launch and costs nothing after the first: deleting an
+    /// entry that is not there already succeeds.
+    static func purgeRetiredSecrets() {
+        _ = delete(.retiredAnthropicAPIKey)
+        _ = delete(.retiredGitHubToken)
     }
 
     private static let service = "com.pocketclaude.secrets"

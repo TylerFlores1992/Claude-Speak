@@ -340,7 +340,6 @@ final class RelayClientTests: XCTestCase {
     func testRelayIsNotConfiguredWithoutBothPieces() {
         KeychainStore.delete(.relayToken)
         let settings = AppSettings(defaults: Self.emptyDefaults())
-        settings.backend = .relay
         settings.relayURLString = "http://mini-pc:8787"
         XCTAssertFalse(settings.isRelayConfigured)
         XCTAssertFalse(settings.isConfigured)

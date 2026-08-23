@@ -14,6 +14,11 @@ struct PocketClaudeApp: App {
     @StateObject private var phoneLink: PhoneLink
 
     init() {
+        // The direct-API mode these belonged to is gone. Removing the feature
+        // does not remove what it stored, so the key and the token are deleted
+        // here rather than left on the device indefinitely.
+        KeychainStore.purgeRetiredSecrets()
+
         let settings = AppSettings()
         let viewModel = ConversationViewModel(settings: settings)
         let phoneLink = PhoneLink()

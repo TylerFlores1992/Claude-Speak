@@ -7,8 +7,6 @@ struct SettingsView: View {
     @ObservedObject var settings: AppSettings
     @Environment(\.dismiss) private var dismiss
 
-    @State private var anthropicKey = ""
-    @State private var githubToken = ""
     @State private var elevenLabsKey = ""
     @State private var relayToken = ""
     @State private var relayUpdateMessage: String?
@@ -18,14 +16,7 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
-                backendSection
-                if settings.backend == .relay {
-                    relaySection
-                } else {
-                    credentialsSection
-                    repositorySection
-                    modelSection
-                }
+                relaySection
                 voiceSection
                 listeningSection
                 aboutSection
@@ -51,26 +42,7 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - Backend
-
-    private var backendSection: some View {
-        Section {
-            Picker("Answers from", selection: $settings.backend) {
-                ForEach(AppSettings.Backend.allCases) { backend in
-                    Text(backend.displayName).tag(backend)
-                }
-            }
-        } header: {
-            Text("Backend")
-        } footer: {
-            switch settings.backend {
-            case .directAPI:
-                Text("Calls Anthropic straight from this phone, billed to your API key per token. Works anywhere with a signal, but can only read the repository and open pull requests — it cannot run anything.")
-            case .relay:
-                Text("Calls the relay on your own machine, which runs the Claude Code CLI against a real checkout. No per-question charge — it uses your Claude subscription — and it can run your tests and builds. Only works while that machine is awake and reachable.")
-            }
-        }
-    }
+    // MARK: - Relay
 
     /// What's wrong with the relay address, or nil when it's usable. Deliberately
     /// says nothing about the token — that row reports its own state.
@@ -153,27 +125,6 @@ struct SettingsView: View {
 
     // MARK: - Credentials
 
-    private var credentialsSection: some View {
-        Section {
-            secretRow(
-                title: "Anthropic API key",
-                placeholder: "sk-ant-…",
-                text: $anthropicKey,
-                key: .anthropicAPIKey
-            )
-            secretRow(
-                title: "GitHub token",
-                placeholder: "github_pat_… or ghp_…",
-                text: $githubToken,
-                key: .githubToken
-            )
-        } header: {
-            Text("Credentials")
-        } footer: {
-            Text("Stored in the iOS Keychain, never in app settings or backups you can read. A fine-grained GitHub token with Contents: Read is enough for read-only use; Contents: Read and write plus Pull requests: Read and write is needed to open PRs.")
-        }
-    }
-
     @ViewBuilder
     private func secretRow(
         title: String,
@@ -232,50 +183,7 @@ struct SettingsView: View {
 
     // MARK: - Repository
 
-    private var repositorySection: some View {
-        Section {
-            TextField("owner/repo", text: $settings.repositorySlug)
-                .autocorrectionDisabled()
-                .textInputAutocapitalization(.never)
-
-            Toggle("Allow write tools", isOn: $settings.allowWriteTools)
-        } header: {
-            Text("Repository")
-        } footer: {
-            Text("With write tools on, Claude can propose branches, commits, and pull requests — each one still needs your spoken or tapped confirmation. Commits to main, master, or the repository's default branch are refused unconditionally.")
-        }
-    }
-
     // MARK: - Model
-
-    private var modelSection: some View {
-        Section {
-            Picker("Model", selection: $settings.model) {
-                ForEach(AppSettings.Model.allCases) { model in
-                    Text(model.displayName).tag(model)
-                }
-            }
-
-            Picker("Effort", selection: $settings.effort) {
-                ForEach(AppSettings.Effort.allCases) { effort in
-                    Text(effort.rawValue.capitalized).tag(effort)
-                }
-            }
-
-            Stepper(
-                "Max tokens: \(settings.maxTokens)",
-                value: $settings.maxTokens,
-                in: 4_000...32_000,
-                step: 2_000
-            )
-
-            Toggle("Structured JSON output", isOn: $settings.useStructuredOutput)
-        } header: {
-            Text("Model")
-        } footer: {
-            Text("Higher effort means more thinking and more tool calls — better answers, longer waits, more tokens. Structured output asks the API to enforce the spoken-summary schema; leave it off unless you see the model drifting out of format.")
-        }
-    }
 
     // MARK: - Voice
 
