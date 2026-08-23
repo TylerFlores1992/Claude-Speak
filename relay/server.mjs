@@ -688,12 +688,39 @@ function wasAsked(id) {
 // back. A pull therefore sends no message and forces no turn of its own; it
 // rides along with the session's next reply, which is almost always the very
 // next thing to happen, because the next thing you do is talk to it.
-const historyWanted = new Set();
+// Persisted, not held in memory, for the same reason probes are: a relay
+// restart would otherwise drop every armed pull without a word, and the phone
+// would go on showing "Pulling" for a note nothing is left holding.
+function pullsPath() {
+  return join(stateDir(), "pulls.json");
+}
+
+function loadPulls() {
+  try {
+    const parsed = JSON.parse(readFileSync(pullsPath(), "utf8"));
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function savePulls(pulls) {
+  try {
+    mkdirSync(dirname(pullsPath()), { recursive: true });
+    writeFileSync(pullsPath(), JSON.stringify(pulls, null, 2));
+  } catch {
+    // A pull that could not be written is a pull that did not happen. The
+    // phone reads the same flag back, so it shows History rather than a
+    // "Pulling" that will never resolve.
+  }
+}
 
 function requestHistory(id) {
   const key = normalizeCloudId(id);
   if (!key) return false;
-  historyWanted.add(key);
+  const pulls = loadPulls();
+  pulls[key] = new Date().toISOString();
+  savePulls(pulls);
   // A pull is also a reason to want this session's answers: the hook checks
   // that before it sends anything at all, so without this the note would sit
   // unread behind the very gate it is waiting on.
@@ -703,12 +730,16 @@ function requestHistory(id) {
 
 function wantsHistory(id) {
   const key = normalizeCloudId(id);
-  return key ? historyWanted.has(key) : false;
+  return key ? Boolean(loadPulls()[key]) : false;
 }
 
 function clearHistoryWant(id) {
   const key = normalizeCloudId(id);
-  if (key) historyWanted.delete(key);
+  if (!key) return;
+  const pulls = loadPulls();
+  if (!(key in pulls)) return;
+  delete pulls[key];
+  savePulls(pulls);
 }
 
 /**

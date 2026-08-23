@@ -145,7 +145,7 @@ a machine that was set up by hand.
 | `RELAY_SUPERVISED` | *(set by `run.ps1`)* | Tells the relay a supervisor exists, so an update may exit to restart. |
 | `RELAY_ANSWER_TOKEN` | *(none)* | Narrow token for `/cloud/answer` only. Without it, cloud answers are refused. See `hooks/README.md`. |
 | `RELAY_ANSWER_ALL` | `0` | Accept answers from every cloud session, not only ones this relay asked. |
-| `RELAY_STATE_DIR` | `~/.pocketclaude` | Where titles, remembered cloud sessions, archived ids, and transcripts are kept. |
+| `RELAY_STATE_DIR` | `~/.pocketclaude` | Where titles, remembered cloud sessions, archived ids, pending history pulls, and transcripts are kept. |
 
 ### Endpoints
 
@@ -276,6 +276,12 @@ conversation. No API returns a cloud session's messages, but the Stop hook runs
 the hook. `POST /cloud/pull` leaves a note that the hook collects on
 its next probe, and the history comes back with the next reply.
 
+That note is kept in `RELAY_STATE_DIR/pulls.json`, for the same reason probes
+are on disk: held in memory, a relay restart dropped every armed pull without
+saying so, and the phone went on showing **Pulling** for a note nothing was
+left holding. It is removed once the history lands, so a restart cannot
+resurrect a pull that was already answered.
+
 So a pull sends no message and starts no turn: nothing about it shows up in the
 conversation on claude.ai. Only plain user and assistant text is sent, never
 tool calls or attachments. See `relay/hooks/README.md`.
@@ -371,7 +377,7 @@ stays on screen where you can read it later.
 node relay/test.mjs
 ```
 
-19 tests: the stream-json interpreter, the CLI argument builder, and an
+97 tests: the stream-json interpreter, the CLI argument builder, and an
 end-to-end pass that runs the real server against a fake `claude` binary and
 asserts on the SSE frames a phone would receive — including that subagent
 chatter never reaches the speech path.

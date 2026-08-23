@@ -942,6 +942,40 @@ test("a pull is found under either id spelling", () => {
   assert.equal(wantsHistory("session_01SPELL"), true);
 });
 
+test("a pull survives a relay restart", () => {
+  // Held only in memory, a restart dropped every armed pull without a word,
+  // and the phone went on showing "Pulling" for a note nothing was holding.
+  // The file is what a restarted relay reads back, so the file is the test.
+  requestHistory("session_01RESTART");
+  const onDisk = JSON.parse(
+    readFileSync(join(process.env.RELAY_STATE_DIR, "pulls.json"), "utf8")
+  );
+  assert.ok(onDisk["session_01RESTART"], "the pull is on disk, not only in memory");
+});
+
+test("an answered pull is cleared from disk, not just from memory", () => {
+  // Otherwise a restart would resurrect a pull that had already been answered,
+  // and the session would send its whole history again on its next turn.
+  requestHistory("session_01CLEARED");
+  clearHistoryWant("session_01CLEARED");
+  const onDisk = JSON.parse(
+    readFileSync(join(process.env.RELAY_STATE_DIR, "pulls.json"), "utf8")
+  );
+  assert.equal("session_01CLEARED" in onDisk, false);
+});
+
+test("a pull id is a key, never a path", () => {
+  // Same boundary as probes: normalizeCloudId is a spelling rule, not a
+  // validator, and pulls live in one fixed file where the id is only a key.
+  requestHistory("../../etc/passwd");
+  assert.equal(wantsHistory("../../etc/passwd"), true, "stored as an ordinary key");
+  assert.equal(
+    readdirSync(process.env.RELAY_STATE_DIR).some((name) => name.includes("passwd")),
+    false,
+    "and never as a file"
+  );
+});
+
 test("pulled history replaces the relay's own notes", () => {
   // What the hook sends is the real conversation, including everything said
   // before this relay had heard of the session, so it supersedes rather than
