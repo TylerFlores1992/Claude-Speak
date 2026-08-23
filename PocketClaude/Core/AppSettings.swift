@@ -172,13 +172,6 @@ final class AppSettings: ObservableObject {
         didSet { defaults.set(wakePhrase, forKey: Keys.wakePhrase) }
     }
 
-    /// The last cloud session link used, so it does not have to be pasted
-    /// again. Not a secret: it identifies a session, and reaching it still
-    /// needs the relay's token and your Claude account.
-    @Published var lastCloudSessionLink: String {
-        didSet { defaults.set(lastCloudSessionLink, forKey: Keys.lastCloudSessionLink) }
-    }
-
     /// Leave music and podcasts playing, turned down, instead of stopping them.
     @Published var keepOtherAudioPlaying: Bool {
         didSet {
@@ -215,7 +208,6 @@ final class AppSettings: ObservableObject {
         static let stemPressControl = "settings.stemPressControl"
         static let wakeWordEnabled = "settings.wakeWordEnabled"
         static let wakePhrase = "settings.wakePhrase"
-        static let lastCloudSessionLink = "settings.lastCloudSessionLink"
         static let keepOtherAudioPlaying = "settings.keepOtherAudioPlaying"
     }
 
@@ -251,7 +243,6 @@ final class AppSettings: ObservableObject {
         // Two words, both common, and unlikely as a pair in ordinary speech —
         // a one-word phrase fires on the radio.
         self.wakePhrase = defaults.string(forKey: Keys.wakePhrase) ?? "hey claude"
-        self.lastCloudSessionLink = defaults.string(forKey: Keys.lastCloudSessionLink) ?? ""
         self.keepOtherAudioPlaying = defaults.bool(forKey: Keys.keepOtherAudioPlaying)
         // The session controller is a namespace, not an object, so it has to be
         // told at launch rather than reading settings itself.

@@ -488,18 +488,6 @@ final class ConversationViewModel: ObservableObject {
         return try await (sessions, projects)
     }
 
-    /// Brings a cloud session onto the relay machine.
-    ///
-    /// The link is passed through as typed; the relay is what decides whether
-    /// it is a session id, since that value becomes a command-line argument
-    /// there and validating it anywhere else would be advisory.
-    func teleport(link: String, project: String) async throws {
-        guard let client = RelayClient.make(settings: settings) else {
-            throw RelayError.notConfigured
-        }
-        try await client.teleport(sessionID: link, project: project)
-    }
-
     /// Hides a session from the dashboard without touching its transcript.
     func archiveSession(id: String) async throws {
         guard let client = RelayClient.make(settings: settings) else {
@@ -514,24 +502,6 @@ final class ConversationViewModel: ObservableObject {
             throw RelayError.notConfigured
         }
         try await client.deleteSession(id: id)
-    }
-
-    /// Whether the relay is serving its session to claude.ai and the Claude app.
-    func remoteControlStatus() async throws -> RelayClient.RemoteControlState {
-        guard let client = RelayClient.make(settings: settings) else {
-            throw RelayError.notConfigured
-        }
-        return try await client.remoteControlStatus()
-    }
-
-    /// Starts or stops Remote Control on the relay machine.
-    func setRemoteControl(_ on: Bool, project: String = "") async throws -> RelayClient.RemoteControlState {
-        guard let client = RelayClient.make(settings: settings) else {
-            throw RelayError.notConfigured
-        }
-        return on
-            ? try await client.startRemoteControl(project: project)
-            : try await client.stopRemoteControl()
     }
 
     /// Points the conversation at a cloud session and shows what we have of it.
@@ -621,32 +591,18 @@ final class ConversationViewModel: ObservableObject {
         persist()
     }
 
-    /// Leaves the cloud session and goes back to the relay's own Claude Code.
-    func leaveCloudSession() {
-        guard !activeCloudSessionID.isEmpty else { return }
+    /// Forgets which cloud session questions were going to.
+    ///
+    /// Anything that moves you to a different conversation has to call this.
+    /// It used to be reachable only from a chip in the composer, so starting a
+    /// new session or opening a local one left the routing pointed at the
+    /// cloud: the screen showed one conversation and the next question went to
+    /// another.
+    private func clearCloudSession() {
         activeCloudSessionID = ""
         cloudSessionTitle = nil
         canPullHistory = false
         pullPending = false
-        newSession()
-    }
-
-    /// Starts a new cloud session with a first task.
-    ///
-    /// Checks the relay is there first. Starting genuinely takes a while, so
-    /// its timeout is long, and waiting out a long timeout to be told the relay
-    /// was never reachable is the worst version of this.
-    func startCloudSession(task: String, project: String) async throws -> CloudSession {
-        guard let client = RelayClient.make(settings: settings) else {
-            throw RelayError.notConfigured
-        }
-        guard await client.isReachable() else {
-            throw RelayError.relay(
-                "Can't reach the relay. It has to be running and on your tailnet to start a cloud session — "
-                    + "the work runs in Anthropic's cloud, but the relay is what asks for it."
-            )
-        }
-        return try await client.startCloudSession(task: task, project: project)
     }
 
     /// Cloud sessions the relay has pulled down before.
@@ -673,28 +629,6 @@ final class ConversationViewModel: ObservableObject {
         try await client.forgetCloudSession(id: id)
     }
 
-    /// Re-pulls remembered cloud sessions so their local copies match the
-    /// cloud again. One click for all of them, or one named session.
-    func refreshCloudSessions(sessionID: String? = nil) async throws -> [CloudRefreshResult] {
-        guard let client = RelayClient.make(settings: settings) else {
-            throw RelayError.notConfigured
-        }
-        return try await client.refreshCloudSessions(sessionID: sessionID)
-    }
-
-    /// Queues a message into a cloud session without bringing it here.
-    ///
-    /// Returns the session's URL, and no answer, because the CLI returns no
-    /// answer: `claude -p --cloud` posts the message and exits. Use this to
-    /// start work you will read later in the Claude app; teleport the session
-    /// instead if you want it answered in your ear.
-    func sendToCloud(link: String, text: String) async throws -> URL? {
-        guard let client = RelayClient.make(settings: settings) else {
-            throw RelayError.notConfigured
-        }
-        return try await client.sendToCloud(sessionID: link, text: text)
-    }
-
     /// Picks up a Claude Code session that already exists on the relay machine,
     /// including one started at the keyboard.
     ///
@@ -703,6 +637,7 @@ final class ConversationViewModel: ObservableObject {
     /// question can refer to what was said before.
     func resume(_ session: RelaySession) {
         store.save(self.session)
+        clearCloudSession()
         var resumed = Session(model: settings.model.rawValue)
         resumed.relaySessionID = session.id
         self.session = resumed
@@ -717,6 +652,7 @@ final class ConversationViewModel: ObservableObject {
     /// Starts a fresh session in a named workspace.
     func startSession(inProject project: String) {
         store.save(session)
+        clearCloudSession()
         session = Session(model: settings.model.rawValue)
         activeProject = project
         append(.init(kind: .status, text: "New session in \(project)."))
@@ -1150,6 +1086,7 @@ final class ConversationViewModel: ObservableObject {
         // Keep the old conversation. This used to delete it, which meant a
         // mistapped toolbar button destroyed an hour of context with no undo.
         store.save(session)
+        clearCloudSession()
         // A fresh Session carries no relaySessionID, so the next relay question
         // starts a new Claude Code conversation rather than resuming this one.
         session = Session(model: settings.model.rawValue)

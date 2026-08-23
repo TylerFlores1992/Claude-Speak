@@ -21,12 +21,12 @@ struct RelaySession: Identifiable, Equatable, Sendable {
     var isChat: Bool { project.lowercased() == "chat" || projectPath.hasSuffix("pocketclaude-chat") }
 }
 
-/// A cloud session that has been brought onto the relay machine before.
+/// A cloud session this app has been told about.
 ///
-/// Remembered because nothing can list cloud sessions: `claude agents --json`
-/// covers local background sessions only, and the teleport picker is
-/// interactive. Remembering the ones you have pulled is what turns "paste every
-/// link again" into one button.
+/// Remembered because nothing can list cloud sessions: there is no API for it,
+/// and `claude agents --json` covers local background sessions only. Keeping
+/// the ones you have added is what turns "paste the link again" into a row you
+/// can tap.
 struct CloudSession: Identifiable, Equatable, Sendable {
     let cloudID: String
     let localID: String?
@@ -36,16 +36,6 @@ struct CloudSession: Identifiable, Equatable, Sendable {
 
     var id: String { cloudID }
     var displayTitle: String { title ?? cloudID }
-}
-
-/// The outcome of refreshing one remembered session.
-struct CloudRefreshResult: Identifiable, Equatable, Sendable {
-    let cloudID: String
-    let ok: Bool
-    let title: String?
-    let problem: String?
-
-    var id: String { cloudID }
 }
 
 /// Somewhere a new session can run.
@@ -142,25 +132,6 @@ extension RelayClient {
         )
     }
 
-    /// Pulls a session from Anthropic's cloud onto the relay machine.
-    ///
-    /// After this succeeds the session is an ordinary local one: it appears in
-    /// `sessions()` and `ask` can resume it like any other. Nothing about it is
-    /// special afterwards, which is why this is the route worth having rather
-    /// than a parallel cloud-session mode through the whole app.
-    ///
-    /// What comes across is the conversation and the branch. The cloud
-    /// environment - its variables, its setup script, its network rules - does
-    /// not; work continues in the relay machine's own environment.
-    func teleport(sessionID: String, project: String = "") async throws {
-        var body: [String: JSONValue] = ["sessionId": .string(sessionID)]
-        if !project.isEmpty { body["project"] = .string(project) }
-        let json = try await post(path: "teleport", body: body, timeout: 200)
-        if let problem = json["error"]?.stringValue, !problem.isEmpty {
-            throw RelayError.relay(problem)
-        }
-    }
-
     /// Hides a session from the list. The transcript stays on the relay
     /// machine and `claude --resume` still works at a keyboard — it has only
     /// left this list.
@@ -180,40 +151,6 @@ extension RelayClient {
         }
     }
 
-    /// Whether the relay is serving a session to claude.ai and the Claude app.
-    struct RemoteControlState: Equatable, Sendable {
-        var running: Bool
-        var url: URL?
-        var problem: String?
-    }
-
-    func remoteControlStatus() async throws -> RemoteControlState {
-        parseRemoteControl(try await getJSON(path: "remote-control"))
-    }
-
-    /// Starts the Remote Control server on the relay machine.
-    ///
-    /// This is what makes a session watchable from somewhere else while the
-    /// phone drives it: claude.ai/code and the Claude app connect to the
-    /// session running here, so the same conversation is visible on both.
-    func startRemoteControl(project: String = "") async throws -> RemoteControlState {
-        var body: [String: JSONValue] = [:]
-        if !project.isEmpty { body["project"] = .string(project) }
-        return parseRemoteControl(try await post(path: "remote-control", body: body, timeout: 30))
-    }
-
-    func stopRemoteControl() async throws -> RemoteControlState {
-        parseRemoteControl(try await post(path: "remote-control/stop", body: [:], timeout: 20))
-    }
-
-    private func parseRemoteControl(_ json: JSONValue) -> RemoteControlState {
-        RemoteControlState(
-            running: json["running"]?.boolValue ?? false,
-            url: (json["url"]?.stringValue).flatMap(URL.init(string:)),
-            problem: json["error"]?.stringValue
-        )
-    }
-
     /// Cloud sessions this relay has pulled down before.
     func cloudSessions() async throws -> [CloudSession] {
         let json = try await getJSON(path: "cloud")
@@ -230,28 +167,6 @@ extension RelayClient {
                 title: entry["title"]?.stringValue,
                 project: entry["project"]?.stringValue,
                 updatedAt: formatter.date(from: stamp) ?? plain.date(from: stamp)
-            )
-        }
-    }
-
-    /// Re-pulls remembered cloud sessions, or one of them.
-    ///
-    /// Returns a result per session rather than throwing on the first failure:
-    /// teleport needs a clean checkout, so one repository with uncommitted work
-    /// must not hide the others that refreshed fine.
-    func refreshCloudSessions(sessionID: String? = nil) async throws -> [CloudRefreshResult] {
-        var body: [String: JSONValue] = [:]
-        if let sessionID, !sessionID.isEmpty { body["sessionId"] = .string(sessionID) }
-        // Long: each session is a teleport, and a teleport fetches a branch.
-        let json = try await post(path: "cloud/refresh", body: body, timeout: 400)
-
-        return (json["results"]?.arrayValue ?? []).compactMap { entry in
-            guard let cloudID = entry["cloudId"]?.stringValue else { return nil }
-            return CloudRefreshResult(
-                cloudID: cloudID,
-                ok: entry["ok"]?.boolValue ?? false,
-                title: entry["title"]?.stringValue,
-                problem: entry["error"]?.stringValue
             )
         }
     }
@@ -383,46 +298,6 @@ extension RelayClient {
             throw RelayError.emptyResponse
         }
         return answer
-    }
-
-    /// Starts a new cloud session with a first task, and returns its id.
-    func startCloudSession(task: String, project: String = "") async throws -> CloudSession {
-        var body: [String: JSONValue] = ["text": .string(task)]
-        if !project.isEmpty { body["project"] = .string(project) }
-        let json = try await post(path: "cloud/start", body: body, timeout: 200)
-        if let problem = json["error"]?.stringValue, !problem.isEmpty {
-            throw RelayError.relay(problem)
-        }
-        guard let id = json["sessionId"]?.stringValue else {
-            throw RelayError.relay("The session started but reported no id.")
-        }
-        return CloudSession(
-            cloudID: id,
-            localID: nil,
-            title: json["title"]?.stringValue,
-            project: project.isEmpty ? nil : project,
-            updatedAt: Date()
-        )
-    }
-
-    /// Queues a message into a cloud session.
-    ///
-    /// Returns without an answer, because the CLI returns without one: this
-    /// posts the message and exits. Read the reply in the Claude app, or
-    /// teleport the session first if you want it answered here.
-    func sendToCloud(sessionID: String, text: String) async throws -> URL? {
-        let json = try await post(
-            path: "cloud/send",
-            body: ["sessionId": .string(sessionID), "text": .string(text)],
-            timeout: 70
-        )
-        // Checked here rather than in `post`, which no longer treats an "error"
-        // field as fatal: Remote Control reports why it could not start in that
-        // field on an otherwise successful request. This endpoint means it.
-        if let problem = json["error"]?.stringValue, !problem.isEmpty {
-            throw RelayError.relay(problem)
-        }
-        return (json["url"]?.stringValue).flatMap(URL.init(string:))
     }
 
     /// Shared plumbing for the endpoints that post JSON and read JSON back.

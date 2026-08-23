@@ -35,14 +35,9 @@ struct ConversationScreen: View {
             }
             .navigationTitle(viewModel.activeProject.isEmpty ? "PocketClaude" : viewModel.activeProject)
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button { viewModel.newSession() } label: {
-                        Image(systemName: "square.and.pencil")
-                    }
-                    .accessibilityLabel("New session")
-                }
-            }
+            // No toolbar of its own. Starting a fresh conversation lives on
+            // the sessions screen, next to the list of what already exists,
+            // rather than as an unlabelled icon a thumb finds by accident.
             .sheet(isPresented: $isShowingSessions) {
                 SessionListView(viewModel: viewModel)
             }
@@ -208,53 +203,32 @@ struct ConversationScreen: View {
                     .transition(.scale.combined(with: .opacity))
                 }
 
-                if !viewModel.activeCloudSessionID.isEmpty {
-                    // Named on the composer rather than only in the transcript,
-                    // because which machine answers changes what to expect: a
-                    // wait instead of speech as it arrives, and a conversation
-                    // that outlives this app.
+                // Only in a cloud session, and only while there is history
+                // left to bring over. Once the conversation is on screen there
+                // is nothing more to fetch, and a button that repeats what it
+                // already did is the kind of thing you tap twice wondering
+                // whether it worked.
+                if !viewModel.activeCloudSessionID.isEmpty, viewModel.canPullHistory {
                     Button {
-                        viewModel.leaveCloudSession()
+                        Task { await viewModel.pullCloudHistory() }
                     } label: {
                         HStack(spacing: 5) {
-                            Image(systemName: "cloud.fill").font(.caption2)
-                            Text("claude.ai")
+                            Image(systemName: viewModel.pullPending
+                                ? "clock.arrow.circlepath"
+                                : "arrow.down.circle")
+                                .font(.caption2)
+                            Text(viewModel.pullPending ? "Pulling" : "History")
                                 .font(.subheadline.weight(.medium))
-                            Image(systemName: "xmark").font(.caption2)
                         }
                         .padding(.horizontal, 12)
                         .padding(.vertical, 9)
-                        .background(Color.accentColor.opacity(0.18), in: Capsule())
-                        .foregroundStyle(Color.accentColor)
+                        .background(Color.pcIconWell, in: Capsule())
+                        .foregroundStyle(.primary)
                     }
-                    .accessibilityLabel("On claude.ai. Tap to go back to the relay.")
-
-                    // Only while there is history left to bring over. Once the
-                    // conversation is on screen there is nothing more to fetch,
-                    // and a button that repeats what it already did is the kind
-                    // of thing you tap twice wondering whether it worked.
-                    if viewModel.canPullHistory {
-                        Button {
-                            Task { await viewModel.pullCloudHistory() }
-                        } label: {
-                            HStack(spacing: 5) {
-                                Image(systemName: viewModel.pullPending
-                                    ? "clock.arrow.circlepath"
-                                    : "arrow.down.circle")
-                                    .font(.caption2)
-                                Text(viewModel.pullPending ? "Pulling" : "History")
-                                    .font(.subheadline.weight(.medium))
-                            }
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 9)
-                            .background(Color.pcIconWell, in: Capsule())
-                            .foregroundStyle(.primary)
-                        }
-                        .disabled(viewModel.pullPending)
-                        .accessibilityLabel(viewModel.pullPending
-                            ? "History requested. It arrives with the next reply."
-                            : "Bring this session's conversation over from claude.ai for reference.")
-                    }
+                    .disabled(viewModel.pullPending)
+                    .accessibilityLabel(viewModel.pullPending
+                        ? "History requested. It arrives with the next reply."
+                        : "Bring this session's conversation over from claude.ai for reference.")
                 }
 
                 ChipMenu(title: modelChipTitle, systemImage: "sparkle") {

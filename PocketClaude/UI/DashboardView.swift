@@ -1,17 +1,15 @@
 import SwiftUI
 
-/// The home screen: every Claude Code session on the relay machine, grouped by
-/// repository.
+/// The home screen: the sessions you can talk to, cloud ones first.
 ///
-/// These are the CLI's own sessions, so a conversation started at the keyboard
-/// appears here and can be picked up from the phone. One repository has many
-/// sessions — every separate conversation you have had in it.
+/// Cloud sessions run on Anthropic's infrastructure and are the ones this app
+/// is really for — the same conversations that are open in the Claude app. Add
+/// one with the + button and its claude.ai link; nothing on the relay machine
+/// can list them, so the link is how they get here.
 ///
-/// The Claude app's cloud sessions are not here, because they run on
-/// Anthropic's infrastructure and nothing on this machine can see them. Nor is
-/// there an API that lists them. But they are reachable one at a time, through
-/// the CLI: the cloud button brings one across with `--teleport`, after which
-/// it is an ordinary local session and appears in this list like any other.
+/// Below those are the relay machine's own Claude Code sessions, grouped by
+/// repository, so a conversation started at the keyboard can be picked up from
+/// the phone.
 struct DashboardView: View {
     @ObservedObject var viewModel: ConversationViewModel
 
@@ -21,27 +19,7 @@ struct DashboardView: View {
     @State private var isLoading = false
     @State private var loadError: String?
     @State private var isChoosingProject = false
-    @State private var isBringingCloudSession = false
-    @State private var cloudSessionLink = ""
-    @State private var teleportProject = ""
-    @State private var teleportProblem: String?
-    @State private var isTeleporting = false
-    @State private var cloudMessage = ""
-    @State private var isSendingToCloud = false
-    @State private var queuedSessionURL: URL?
-    @State private var sendProblem: String?
     @State private var cloudSessions: [CloudSession] = []
-    @State private var isRefreshingCloud = false
-    @State private var refreshSummary: String?
-    @State private var newCloudTask = ""
-    @State private var isStartingCloud = false
-    /// Kept apart from `sendProblem` on purpose. They were the same value, and
-    /// it was rendered in the "Leave it there" section — so a failure to
-    /// *start* a session appeared somewhere else on the screen, often below the
-    /// fold. Pressing a button and seeing nothing is the result.
-    @State private var startProblem: String?
-    @State private var remoteControl = RelayClient.RemoteControlState(running: false)
-    @State private var isTogglingRemoteControl = false
     /// Set by a delete swipe; the confirmation dialog acts on it. Deleting is
     /// the one action here that cannot be taken back, so it is the one that
     /// asks.
@@ -90,47 +68,23 @@ struct DashboardView: View {
             }
             Button("Cancel", role: .cancel) {}
         }
-        .sheet(isPresented: $isBringingCloudSession) {
-            cloudSessionSheet
-                .onAppear {
-                    if cloudSessionLink.isEmpty {
-                        cloudSessionLink = viewModel.settings.lastCloudSessionLink
-                    }
-                }
-                .task {
-                    await loadCloudSessions()
-                    // The workspace pickers in here read `projects`, which the
-                    // dashboard behind this sheet loads. If that load has not
-                    // finished, or failed, the pickers come up silently empty
-                    // and the only option is a default whose name appears
-                    // nowhere. Load it here too rather than inheriting a gap.
-                    if projects.isEmpty { await load() }
-                    remoteControl = (try? await viewModel.remoteControlStatus())
-                        ?? RelayClient.RemoteControlState(running: false)
-                }
-        }
         .sheet(isPresented: $isAddingSession) { addSessionSheet }
         .toolbar {
-            ToolbarItemGroup(placement: .topBarLeading) {
+            ToolbarItem(placement: .topBarLeading) {
                 Button { isAddingSession = true } label: {
                     Image(systemName: "plus.circle")
                 }
                 .accessibilityLabel("Add a session from claude.ai")
-
-                Button { isBringingCloudSession = true } label: {
-                    Image(systemName: "cloud.fill")
-                }
-                .accessibilityLabel("Cloud session options")
             }
         }
     }
 
     /// Paste a link, get a row. The whole of adding a session.
     ///
-    /// Separate from the older cloud sheet on purpose: that one carries
-    /// teleporting, queueing, Remote Control and refreshing, which are
-    /// occasional and easy to confuse with each other. This is the one thing
-    /// done often, so it is one field and one button.
+    /// One field and one button, because this is the thing done often. The
+    /// sheet that used to sit beside it carried teleporting, queueing, Remote
+    /// Control and refreshing; teleport turned out not to work at all, and the
+    /// rest were occasional enough to be noise next to this.
     private var addSessionSheet: some View {
         NavigationStack {
             Form {
@@ -200,292 +154,6 @@ struct DashboardView: View {
         }
     }
 
-    /// Pulls a session from the Claude app onto the relay machine.
-    ///
-    /// Those sessions run on Anthropic's infrastructure, so nothing on the
-    /// relay can see them and there is no API that lists them. `--teleport` is
-    /// the supported way across, and once it has run the session is an
-    /// ordinary local one that this list already shows.
-    private var cloudSessionSheet: some View {
-        NavigationStack {
-            Form {
-                Section {
-                    TextField("claude.ai/code/session_…", text: $cloudSessionLink, axis: .vertical)
-                        .autocorrectionDisabled()
-                        .textInputAutocapitalization(.never)
-                        .lineLimit(1...3)
-                } header: {
-                    Text("Session link")
-                } footer: {
-                    Text("Open the session in the Claude app, copy its link, and paste it here.")
-                }
-
-                Section {
-                    Picker("Repository", selection: $teleportProject) {
-                        Text(defaultProjectLabel).tag("")
-                        ForEach(projects.filter { $0.available && !$0.isScratch }) { project in
-                            Text(project.name).tag(project.name)
-                        }
-                    }
-                } footer: {
-                    Text("Teleport checks out the session's branch, so it has to run in a checkout of the same repository, with nothing uncommitted.")
-                }
-
-                if let teleportProblem {
-                    Section {
-                        Label(teleportProblem, systemImage: "exclamationmark.triangle.fill")
-                            .font(.footnote)
-                            .foregroundStyle(.orange)
-                    }
-                }
-
-                Section {
-                    Button {
-                        // Straight into the lane from the pasted link. Waiting
-                        // for the session to appear in a list first was the
-                        // long way round, and it only appears there once the
-                        // relay has touched it — which is a chicken and egg if
-                        // talking to it is the thing you came to do.
-                        viewModel.useCloudSession(CloudSession(
-                            cloudID: cloudSessionLink.trimmingCharacters(in: .whitespacesAndNewlines),
-                            localID: nil,
-                            title: nil,
-                            project: teleportProject.isEmpty ? nil : teleportProject,
-                            updatedAt: Date()
-                        ))
-                        viewModel.settings.lastCloudSessionLink = cloudSessionLink
-                            .trimmingCharacters(in: .whitespacesAndNewlines)
-                        isBringingCloudSession = false
-                    } label: {
-                        Label("Talk to it by voice", systemImage: "mic.fill")
-                    }
-                    .disabled(!hasCloudLink)
-                } header: {
-                    Text("Talk to it where it is")
-                } footer: {
-                    Text("Questions run in that session on claude.ai and the answer is spoken here when the turn finishes. The conversation stays there — open it in the Claude app any time.")
-                }
-
-                Section {
-                    Button {
-                        Task { await bringCloudSession() }
-                    } label: {
-                        HStack {
-                            Text("Bring it here")
-                            Spacer()
-                            if isTeleporting { ProgressView().controlSize(.small) }
-                        }
-                    }
-                    .disabled(isTeleporting || !hasCloudLink)
-                } header: {
-                    Text("Continue it here")
-                } footer: {
-                    Text("The conversation and its branch come across, and it becomes an ordinary session in the list above — answered out loud like any other. The cloud environment — its variables, setup script, and network rules — does not come with it; work continues in the relay machine's own environment.")
-                }
-
-                Section {
-                    Toggle("Watch from claude.ai and the Claude app", isOn: Binding(
-                        get: { remoteControl.running },
-                        set: { on in Task { await setRemoteControl(on) } }
-                    ))
-                    .disabled(isTogglingRemoteControl)
-
-                    if let url = remoteControl.url {
-                        Link(destination: url) {
-                            Label("Open the live session", systemImage: "arrow.up.forward.app")
-                        }
-                    } else if remoteControl.running {
-                        Text("Starting — the link appears once the server reports it.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    if let problem = remoteControl.problem {
-                        Label(problem, systemImage: "exclamationmark.triangle.fill")
-                            .font(.footnote)
-                            .foregroundStyle(.orange)
-                    }
-                } header: {
-                    Text("Watch live")
-                } footer: {
-                    // The distinction that matters, and the one I got wrong
-                    // first: teleport copies, this connects.
-                    Text("Brings up Remote Control on the relay machine, so the session it is running shows up in claude.ai/code and the Claude app — the same conversation, live, while you drive it by voice from here. This is the closest thing to two machines on one session: bringing a cloud session here copies it, this shares it. Remote Control is a research preview, so it may report that it isn't enabled for your account.")
-                }
-
-                if !cloudSessions.isEmpty {
-                    Section {
-                        ForEach(cloudSessions) { session in
-                            Button {
-                                viewModel.useCloudSession(session)
-                                isBringingCloudSession = false
-                            } label: {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(session.displayTitle).lineLimit(1)
-                                    Text(session.project ?? "on claude.ai")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                            .buttonStyle(.plain)
-                        }
-
-                        Button {
-                            Task { await refreshCloud() }
-                        } label: {
-                            HStack {
-                                Label("Update all from the cloud", systemImage: "arrow.clockwise")
-                                Spacer()
-                                if isRefreshingCloud { ProgressView().controlSize(.small) }
-                            }
-                        }
-                        .disabled(isRefreshingCloud)
-
-                        if let refreshSummary {
-                            Text(refreshSummary)
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                        }
-                    } header: {
-                        Text("Brought here before")
-                    } footer: {
-                        // Both limits stated, because both are surprising.
-                        Text("Nothing can list your cloud sessions, so these are the ones you have pulled down before — pulling a new one adds it here. Updating re-pulls each of them, which needs a clean checkout of its repository; anything with uncommitted work is reported and skipped rather than stopping the rest.")
-                    }
-                }
-
-                Section {
-                    TextField("What should it work on?", text: $newCloudTask, axis: .vertical)
-                        .lineLimit(1...4)
-
-                    Picker("Repository", selection: $teleportProject) {
-                        Text(defaultProjectLabel).tag("")
-                        ForEach(projects.filter { $0.available && !$0.isScratch }) { project in
-                            Text(project.name).tag(project.name)
-                        }
-                    }
-
-                    Button {
-                        Task { await startCloudSession() }
-                    } label: {
-                        HStack {
-                            Text("Start a session on claude.ai")
-                            Spacer()
-                            if isStartingCloud { ProgressView().controlSize(.small) }
-                        }
-                    }
-                    .disabled(
-                        isStartingCloud
-                            || newCloudTask.trimmingCharacters(in: .whitespaces).isEmpty
-                    )
-
-                    if isStartingCloud {
-                        Text("Provisioning a machine and cloning the repository. This takes a minute.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    if let startProblem {
-                        Label(startProblem, systemImage: "exclamationmark.triangle.fill")
-                            .font(.footnote)
-                            .foregroundStyle(.orange)
-                    }
-                } header: {
-                    Text("Start something new")
-                } footer: {
-                    Text("Runs on Anthropic's infrastructure, in a session you can open in the Claude app. It clones the repository from GitHub at its current branch, so push anything local first. Once it exists you can talk to it by voice from here.")
-                }
-
-                Section {
-                    TextField("Ask it to do something…", text: $cloudMessage, axis: .vertical)
-                        .lineLimit(1...5)
-
-                    Button {
-                        Task { await sendToCloudSession() }
-                    } label: {
-                        HStack {
-                            Text("Send without bringing it here")
-                            Spacer()
-                            if isSendingToCloud { ProgressView().controlSize(.small) }
-                        }
-                    }
-                    .disabled(
-                        isSendingToCloud
-                            || !hasCloudLink
-                            || cloudMessage.trimmingCharacters(in: .whitespaces).isEmpty
-                    )
-
-                    if let queuedSessionURL {
-                        Link(destination: queuedSessionURL) {
-                            Label("Queued — open in Claude", systemImage: "arrow.up.forward.app")
-                        }
-                    }
-
-                    if let sendProblem {
-                        Label(sendProblem, systemImage: "exclamationmark.triangle.fill")
-                            .font(.footnote)
-                            .foregroundStyle(.orange)
-                    }
-                } header: {
-                    Text("Leave it there")
-                } footer: {
-                    // Stated plainly because the shape is unusual and the
-                    // alternative is waiting for a reply that is not coming.
-                    Text("Queues a message into the session where it already runs, and returns straight away. No answer comes back here — the CLI posts and exits — so read it in the Claude app. Useful for starting something on the way out the door. The mic on the keyboard works for dictating it.")
-                }
-            }
-            .navigationTitle("Cloud session")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { isBringingCloudSession = false }
-                }
-            }
-        }
-    }
-
-    private func setRemoteControl(_ on: Bool) async {
-        isTogglingRemoteControl = true
-        defer { isTogglingRemoteControl = false }
-        do {
-            remoteControl = try await viewModel.setRemoteControl(on, project: teleportProject)
-            // The URL is printed by the server a moment after launch, so the
-            // first reply usually has none. One poll covers the gap without
-            // making the request itself wait on a subprocess.
-            if on, remoteControl.url == nil {
-                try? await Task.sleep(nanoseconds: 2_500_000_000)
-                remoteControl = (try? await viewModel.remoteControlStatus()) ?? remoteControl
-            }
-        } catch {
-            remoteControl = RelayClient.RemoteControlState(
-                running: false,
-                url: nil,
-                problem: (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-            )
-        }
-    }
-
-    private func startCloudSession() async {
-        startProblem = nil
-        isStartingCloud = true
-        defer { isStartingCloud = false }
-        do {
-            let session = try await viewModel.startCloudSession(
-                task: newCloudTask.trimmingCharacters(in: .whitespacesAndNewlines),
-                project: teleportProject
-            )
-            newCloudTask = ""
-            await loadCloudSessions()
-            // Straight into it: starting a session is asking for it, and
-            // making you find the row you just created would be busywork.
-            viewModel.useCloudSession(session)
-            isBringingCloudSession = false
-        } catch {
-            startProblem = (error as? LocalizedError)?.errorDescription
-                ?? error.localizedDescription
-        }
-    }
-
     private func loadCloudSessions() async {
         // Keep what is already on screen if the relay does not answer. The
         // previous version replaced the list with nothing on any failure, so a
@@ -493,31 +161,6 @@ struct DashboardView: View {
         // a session that had failed to save.
         guard let found = try? await viewModel.cloudSessions() else { return }
         cloudSessions = found
-    }
-
-    private func refreshCloud() async {
-        refreshSummary = nil
-        isRefreshingCloud = true
-        defer { isRefreshingCloud = false }
-        do {
-            let results = try await viewModel.refreshCloudSessions()
-            let updated = results.filter(\.ok).count
-            let failed = results.filter { !$0.ok }
-            // Names the first failure rather than only counting it: "1 couldn't
-            // update" with no reason is the report that sends you to a log.
-            if failed.isEmpty {
-                refreshSummary = "Updated \(updated) of \(results.count)."
-            } else {
-                let reason = failed.first?.problem ?? "unknown reason"
-                refreshSummary = "Updated \(updated) of \(results.count). "
-                    + "\(failed.count) couldn't: \(reason)"
-            }
-            await loadCloudSessions()
-            await load()
-        } catch {
-            refreshSummary = (error as? LocalizedError)?.errorDescription
-                ?? error.localizedDescription
-        }
     }
 
     /// What the empty selection is called.
@@ -531,52 +174,6 @@ struct DashboardView: View {
             return "\(first.name) (relay default)"
         }
         return projects.isEmpty ? "Relay default (workspaces not loaded)" : "Relay default"
-    }
-
-    private var hasCloudLink: Bool {
-        !cloudSessionLink.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    private func sendToCloudSession() async {
-        sendProblem = nil
-        queuedSessionURL = nil
-        isSendingToCloud = true
-        defer { isSendingToCloud = false }
-
-        let link = cloudSessionLink.trimmingCharacters(in: .whitespacesAndNewlines)
-        do {
-            queuedSessionURL = try await viewModel.sendToCloud(
-                link: link,
-                text: cloudMessage.trimmingCharacters(in: .whitespacesAndNewlines)
-            )
-            viewModel.settings.lastCloudSessionLink = link
-            cloudMessage = ""
-        } catch {
-            sendProblem = (error as? LocalizedError)?.errorDescription
-                ?? error.localizedDescription
-        }
-    }
-
-    private func bringCloudSession() async {
-        teleportProblem = nil
-        isTeleporting = true
-        defer { isTeleporting = false }
-        do {
-            try await viewModel.teleport(
-                link: cloudSessionLink.trimmingCharacters(in: .whitespacesAndNewlines),
-                project: teleportProject
-            )
-            viewModel.settings.lastCloudSessionLink = cloudSessionLink
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            cloudSessionLink = ""
-            await loadCloudSessions()
-            isBringingCloudSession = false
-            // It is a local session now, so the ordinary list is where it shows.
-            await load()
-        } catch {
-            teleportProblem = (error as? LocalizedError)?.errorDescription
-                ?? error.localizedDescription
-        }
     }
 
     @ViewBuilder

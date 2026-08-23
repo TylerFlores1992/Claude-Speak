@@ -29,16 +29,6 @@ struct RootView: View {
                         }
                         .accessibilityLabel("Settings")
                     }
-                    ToolbarItem(placement: .topBarLeading) {
-                        // Straight back into whatever is open, without picking
-                        // a session first.
-                        Button {
-                            path = [.conversation]
-                        } label: {
-                            Image(systemName: "waveform")
-                        }
-                        .accessibilityLabel("Current conversation")
-                    }
                 }
         }
         // Opening or resuming a session should land you in it.
