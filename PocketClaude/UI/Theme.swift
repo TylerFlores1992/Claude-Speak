@@ -33,6 +33,9 @@ struct ChipMenu<Content: View>: View {
                 Text(title)
                     .font(.subheadline.weight(.medium))
                     .lineLimit(1)
+                    // Keeps its natural width instead of being squeezed to
+                    // "Op..." when the row runs short of space.
+                    .fixedSize(horizontal: true, vertical: false)
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 9)
