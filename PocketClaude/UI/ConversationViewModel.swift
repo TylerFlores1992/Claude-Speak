@@ -713,7 +713,19 @@ final class ConversationViewModel: ObservableObject {
                     "Can't reach the relay. The turn runs on claude.ai, but the relay is what asks for it."
                 )
             }
-            let answer = try await client.askCloud(sessionID: activeCloudSessionID, text: text)
+            let answer = try await client.askCloud(
+                sessionID: activeCloudSessionID,
+                text: text,
+                onWaiting: { elapsed in
+                    // Only once it has been long enough to be worth saying.
+                    guard elapsed >= 60 else { return }
+                    let minutes = Int(elapsed / 60)
+                    Task { @MainActor [weak self] in
+                        guard let self, case .working = self.state else { return }
+                        self.state = .working("Still working on claude.ai — \(minutes)m")
+                    }
+                }
+            )
             let spoken = answer.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !spoken.isEmpty else { throw RelayError.emptyResponse }
 

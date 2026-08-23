@@ -296,7 +296,8 @@ extension RelayClient {
     func askCloud(
         sessionID: String,
         text: String,
-        timeout: TimeInterval = 900
+        timeout: TimeInterval = 900,
+        onWaiting: (@Sendable (TimeInterval) -> Void)? = nil
     ) async throws -> String {
         // One hop's worth of waiting, on both ends. Long enough that a normal
         // turn finishes inside the first hop; short enough to be well under
@@ -319,8 +320,13 @@ extension RelayClient {
             return answer
         }
 
-        let deadline = Date().addingTimeInterval(timeout)
+        // Nothing on screen changes while a hop is in flight, and a turn can
+        // run for many minutes. Without this the app looks frozen for exactly
+        // as long as the interesting work takes.
+        let started = Date()
+        let deadline = started.addingTimeInterval(timeout)
         while Date() < deadline {
+            onWaiting?(Date().timeIntervalSince(started))
             let json = try await post(
                 path: "cloud/await",
                 body: [
