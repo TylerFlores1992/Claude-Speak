@@ -46,25 +46,6 @@ final class AppSettings: ObservableObject {
         }
     }
 
-    /// Where answers come from.
-    ///
-    /// `directAPI` calls Anthropic from the phone and is billed per token.
-    /// `relay` calls your own machine, which runs the Claude Code CLI on your
-    /// subscription — no per-question charge, and it can run your tests.
-    enum Backend: String, CaseIterable, Identifiable {
-        case directAPI
-        case relay
-
-        var id: String { rawValue }
-
-        var displayName: String {
-            switch self {
-            case .directAPI: return "Direct API"
-            case .relay: return "Relay (Claude Code)"
-            }
-        }
-    }
-
     /// `output_config.effort` — controls how much thinking and tool work Claude
     /// does per turn. Higher costs more tokens and takes longer.
     /// Applies to the direct-API path only; the relay's model config lives on
@@ -99,9 +80,6 @@ final class AppSettings: ObservableObject {
         }
     }
 
-    @Published var backend: Backend {
-        didSet { defaults.set(backend.rawValue, forKey: Keys.backend) }
-    }
     /// e.g. `http://mini-pc:8787` — a Tailscale name keeps it off the internet.
     @Published var relayURLString: String {
         didSet { defaults.set(relayURLString, forKey: Keys.relayURLString) }
@@ -116,18 +94,6 @@ final class AppSettings: ObservableObject {
     }
     @Published var effort: Effort {
         didSet { defaults.set(effort.rawValue, forKey: Keys.effort) }
-    }
-    @Published var maxTokens: Int {
-        didSet { defaults.set(maxTokens, forKey: Keys.maxTokens) }
-    }
-    /// `owner/repo`, e.g. `tylerflores1992/camphawk`.
-    @Published var repositorySlug: String {
-        didSet { defaults.set(repositorySlug, forKey: Keys.repositorySlug) }
-    }
-    /// When true, the agent may propose write actions (branch/commit/PR).
-    /// Every write still requires an explicit confirmation at execution time.
-    @Published var allowWriteTools: Bool {
-        didSet { defaults.set(allowWriteTools, forKey: Keys.allowWriteTools) }
     }
     @Published var voiceEngine: VoiceEngine {
         didSet { defaults.set(voiceEngine.rawValue, forKey: Keys.voiceEngine) }
@@ -151,11 +117,6 @@ final class AppSettings: ObservableObject {
     }
     @Published var handsFreeEndKeyword: String {
         didSet { defaults.set(handsFreeEndKeyword, forKey: Keys.handsFreeEndKeyword) }
-    }
-    /// Ask the API to constrain the final answer to our JSON schema. Off by
-    /// default — see DECISIONS.md ("Structured output is opt-in").
-    @Published var useStructuredOutput: Bool {
-        didSet { defaults.set(useStructuredOutput, forKey: Keys.useStructuredOutput) }
     }
     /// Treat an AirPod stem press (a media play/pause command) as the talk
     /// button. Only works while this app is the "Now Playing" app — see
@@ -188,14 +149,10 @@ final class AppSettings: ObservableObject {
     private let defaults: UserDefaults
 
     private enum Keys {
-        static let backend = "settings.backend"
         static let relayURLString = "settings.relayURL"
         static let speakIncrementally = "settings.speakIncrementally"
         static let model = "settings.model"
         static let effort = "settings.effort"
-        static let maxTokens = "settings.maxTokens"
-        static let repositorySlug = "settings.repositorySlug"
-        static let allowWriteTools = "settings.allowWriteTools"
         static let voiceEngine = "settings.voiceEngine"
         static let systemVoiceIdentifier = "settings.systemVoiceIdentifier"
         static let elevenLabsVoiceID = "settings.elevenLabsVoiceID"
@@ -203,7 +160,6 @@ final class AppSettings: ObservableObject {
         static let preferOnDevice = "settings.preferOnDeviceRecognition"
         static let handsFreeMode = "settings.handsFreeMode"
         static let handsFreeEndKeyword = "settings.handsFreeEndKeyword"
-        static let useStructuredOutput = "settings.useStructuredOutput"
         static let speakConfirmations = "settings.speakConfirmations"
         static let stemPressControl = "settings.stemPressControl"
         static let wakeWordEnabled = "settings.wakeWordEnabled"
@@ -213,15 +169,10 @@ final class AppSettings: ObservableObject {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        self.backend = Backend(rawValue: defaults.string(forKey: Keys.backend) ?? "") ?? .directAPI
         self.relayURLString = defaults.string(forKey: Keys.relayURLString) ?? ""
         self.speakIncrementally = defaults.object(forKey: Keys.speakIncrementally) as? Bool ?? true
         self.model = Model(rawValue: defaults.string(forKey: Keys.model) ?? "") ?? .opus5
         self.effort = Effort(rawValue: defaults.string(forKey: Keys.effort) ?? "") ?? .high
-        let storedMaxTokens = defaults.integer(forKey: Keys.maxTokens)
-        self.maxTokens = storedMaxTokens > 0 ? storedMaxTokens : 16_000
-        self.repositorySlug = defaults.string(forKey: Keys.repositorySlug) ?? ""
-        self.allowWriteTools = defaults.object(forKey: Keys.allowWriteTools) as? Bool ?? true
         self.voiceEngine = VoiceEngine(rawValue: defaults.string(forKey: Keys.voiceEngine) ?? "") ?? .system
         self.systemVoiceIdentifier = defaults.string(forKey: Keys.systemVoiceIdentifier) ?? ""
         self.elevenLabsVoiceID = defaults.string(forKey: Keys.elevenLabsVoiceID) ?? ""
@@ -236,7 +187,6 @@ final class AppSettings: ObservableObject {
         self.preferOnDeviceRecognition = defaults.object(forKey: Keys.preferOnDevice) as? Bool ?? false
         self.handsFreeMode = defaults.bool(forKey: Keys.handsFreeMode)
         self.handsFreeEndKeyword = defaults.string(forKey: Keys.handsFreeEndKeyword) ?? "done"
-        self.useStructuredOutput = defaults.bool(forKey: Keys.useStructuredOutput)
         self.speakConfirmations = defaults.object(forKey: Keys.speakConfirmations) as? Bool ?? true
         self.stemPressControl = defaults.bool(forKey: Keys.stemPressControl)
         self.wakeWordEnabled = defaults.bool(forKey: Keys.wakeWordEnabled)
@@ -249,32 +199,10 @@ final class AppSettings: ObservableObject {
         AudioSessionController.keepsOtherAudioPlaying = self.keepOtherAudioPlaying
     }
 
-    /// Split `owner/repo` into its parts. Returns nil when unset or malformed.
-    var repository: (owner: String, name: String)? {
-        let parts = repositorySlug
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .split(separator: "/")
-            .map(String.init)
-        guard parts.count == 2, !parts[0].isEmpty, !parts[1].isEmpty else { return nil }
-        return (parts[0], parts[1])
-    }
+    /// Whether there is enough to answer a question: an address and a token.
+    /// The repository lives on the relay, so nothing about it is needed here.
+    var isConfigured: Bool { isRelayConfigured }
 
-    /// Whether the selected backend has everything it needs to answer a question.
-    /// The two paths need entirely different things, so this switches on mode
-    /// rather than demanding the union of both.
-    var isConfigured: Bool {
-        switch backend {
-        case .directAPI:
-            return KeychainStore.has(.anthropicAPIKey)
-                && KeychainStore.has(.githubToken)
-                && repository != nil
-        case .relay:
-            return isRelayConfigured
-        }
-    }
-
-    /// The relay needs an address and a token; the repository lives on the
-    /// server, so `repositorySlug` is irrelevant in this mode.
     var isRelayConfigured: Bool {
         let trimmed = relayURLString.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, RelayAddress.isUsable(trimmed) else {

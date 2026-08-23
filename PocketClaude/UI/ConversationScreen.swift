@@ -27,10 +27,6 @@ struct ConversationScreen: View {
 
                 statusBar
 
-                if case .awaitingConfirmation(let prompt) = viewModel.state {
-                    confirmationBar(prompt: prompt)
-                }
-
                 composer
             }
             .navigationTitle(viewModel.activeProject.isEmpty ? "PocketClaude" : viewModel.activeProject)
@@ -80,11 +76,6 @@ struct ConversationScreen: View {
         }
     }
 
-    private var isAwaitingConfirmation: Bool {
-        if case .awaitingConfirmation = viewModel.state { return true }
-        return false
-    }
-
     // MARK: - Status
 
     private var statusBar: some View {
@@ -98,15 +89,7 @@ struct ConversationScreen: View {
                     Button {
                         viewModel.isShowingSettings = true
                     } label: {
-                        // Relay mode has no API keys and no repository slug —
-                        // the repo lives on the server — so the direct-API
-                        // wording would send you looking for the wrong fields.
-                        Label(
-                            settings.backend == .relay
-                                ? "Add your relay address"
-                                : "Add your keys and repo",
-                            systemImage: "key.fill"
-                        )
+                        Label("Add your relay address", systemImage: "key.fill")
                     }
                 }
             case .listening:
@@ -115,9 +98,6 @@ struct ConversationScreen: View {
             case .working(let detail):
                 ProgressView().controlSize(.small)
                 Text(detail).lineLimit(1)
-            case .awaitingConfirmation:
-                Label("Waiting for your confirmation", systemImage: "hand.raised.fill")
-                    .foregroundStyle(.orange)
             case .speaking:
                 Label("Speaking", systemImage: "speaker.wave.2.fill")
                     .foregroundStyle(.secondary)
@@ -134,38 +114,6 @@ struct ConversationScreen: View {
         .padding(.horizontal)
         .padding(.vertical, 8)
         .background(.bar)
-    }
-
-    // MARK: - Confirmation
-
-    private func confirmationBar(prompt: String) -> some View {
-        VStack(spacing: 10) {
-            Text(prompt)
-                .font(.callout.weight(.medium))
-                .multilineTextAlignment(.center)
-
-            HStack(spacing: 12) {
-                Button(role: .destructive) {
-                    viewModel.resolveConfirmation(false)
-                } label: {
-                    Text("Cancel").frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-
-                Button {
-                    viewModel.resolveConfirmation(true)
-                } label: {
-                    Text("Confirm").frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-            }
-
-            Text("Or hold the button and say “confirm” or “cancel”.")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-        }
-        .padding()
-        .background(Color.orange.opacity(0.12))
     }
 
     // MARK: - Composer
@@ -262,9 +210,7 @@ struct ConversationScreen: View {
                 } else {
                     TalkButton(
                         isListening: viewModel.state == .listening,
-                        // Still usable while a confirmation is pending, so you
-                        // can answer "confirm" or "cancel" by voice.
-                        isEnabled: !viewModel.state.isBusy || isAwaitingConfirmation,
+                        isEnabled: !viewModel.state.isBusy,
                         size: .compact,
                         onPress: viewModel.beginListening,
                         onRelease: viewModel.endListening

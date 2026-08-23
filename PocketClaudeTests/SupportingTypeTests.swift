@@ -240,43 +240,6 @@ final class SessionStoreTests: XCTestCase {
     }
 }
 
-final class SystemPromptTests: XCTestCase {
-    func testNamesTheRepositoryAndDefaultBranch() {
-        let prompt = SystemPrompt.build(
-            owner: "tylerflores1992",
-            repository: "camphawk",
-            defaultBranch: "develop",
-            allowWrites: true
-        )
-        XCTAssertTrue(prompt.contains("tylerflores1992/camphawk"))
-        XCTAssertTrue(prompt.contains("develop"))
-    }
-
-    func testWriteModeStatesTheNeverCommitToDefaultRule() {
-        let prompt = SystemPrompt.build(
-            owner: "o", repository: "r", defaultBranch: "main", allowWrites: true
-        )
-        XCTAssertTrue(prompt.contains("NEVER commit directly"))
-        XCTAssertTrue(prompt.contains("create_pull_request"))
-    }
-
-    func testReadOnlyModeSaysWritesAreDisabled() {
-        let prompt = SystemPrompt.build(
-            owner: "o", repository: "r", defaultBranch: "main", allowWrites: false
-        )
-        XCTAssertTrue(prompt.contains("Read-only mode"))
-        XCTAssertFalse(prompt.contains("NEVER commit directly"))
-    }
-
-    func testAlwaysSpecifiesTheSpokenSummaryContract() {
-        let prompt = SystemPrompt.build(
-            owner: "o", repository: "r", defaultBranch: nil, allowWrites: false
-        )
-        XCTAssertTrue(prompt.contains("spoken_summary"))
-        XCTAssertTrue(prompt.contains("detail"))
-    }
-}
-
 final class AppSettingsTests: XCTestCase {
     private func makeSettings() -> AppSettings {
         let suiteName = "pocketclaude.tests.\(UUID().uuidString)"
@@ -284,27 +247,10 @@ final class AppSettingsTests: XCTestCase {
         return AppSettings(defaults: defaults)
     }
 
-    func testRepositorySlugParsing() {
-        let settings = makeSettings()
-        settings.repositorySlug = "tylerflores1992/camphawk"
-        XCTAssertEqual(settings.repository?.owner, "tylerflores1992")
-        XCTAssertEqual(settings.repository?.name, "camphawk")
-    }
-
-    func testMalformedSlugIsRejected() {
-        let settings = makeSettings()
-        for bad in ["", "camphawk", "a/b/c", "/camphawk", "tyler/"] {
-            settings.repositorySlug = bad
-            XCTAssertNil(settings.repository, "'\(bad)' should not parse")
-        }
-    }
-
-    func testDefaultsAreOpusHighAndWritesEnabled() {
+    func testDefaultsAreOpusAndHighEffort() {
         let settings = makeSettings()
         XCTAssertEqual(settings.model, .opus5)
         XCTAssertEqual(settings.effort, .high)
-        XCTAssertTrue(settings.allowWriteTools)
         XCTAssertEqual(settings.voiceEngine, .system)
-        XCTAssertFalse(settings.useStructuredOutput)
     }
 }

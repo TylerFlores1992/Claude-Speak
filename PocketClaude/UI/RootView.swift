@@ -42,7 +42,6 @@ struct RootView: View {
                 viewModel.errorMessage = "That pairing link isn't complete. Copy the whole pocketclaude:// line the relay printed."
                 return
             }
-            settings.backend = .relay
             settings.relayURLString = pairing.relayURL
             KeychainStore.set(pairing.token, for: .relayToken)
             viewModel.errorMessage = "Paired with \(pairing.relayURL)."

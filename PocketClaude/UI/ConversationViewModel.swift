@@ -5,20 +5,19 @@ import SwiftUI
 ///
 /// Swift note: `@MainActor` on the class means every property and method is
 /// hopped onto the main thread automatically, which is what SwiftUI needs. The
-/// slow work (`AgentRunner`) is `async` and runs off-main between suspensions.
+/// slow work is `async` and runs off-main between suspensions.
 @MainActor
 final class ConversationViewModel: ObservableObject {
     enum State: Equatable {
         case idle
         case listening
         case working(String)
-        case awaitingConfirmation(String)
         case speaking
 
         var isBusy: Bool {
             switch self {
             case .idle, .listening: return false
-            case .working, .awaitingConfirmation, .speaking: return true
+            case .working, .speaking: return true
             }
         }
     }
@@ -49,9 +48,6 @@ final class ConversationViewModel: ObservableObject {
     private let nowPlaying = NowPlayingKeeper()
 
     private let store: SessionStore
-    private var anthropic = AnthropicClient()
-    private var github = GitHubClient()
-    private var executor: ToolExecutor?
     private var executorRepoSlug: String?
 
     /// The assistant transcript line currently being streamed into, so chunks
@@ -59,12 +55,6 @@ final class ConversationViewModel: ObservableObject {
     private var streamingEntryID: UUID?
     /// Text accumulated from relay chunks this turn.
     private var streamedSoFar = ""
-
-    /// Resumed by `resolveConfirmation` when the person approves or declines.
-    private var confirmationContinuation: CheckedContinuation<Bool, Never>?
-    /// Non-nil exactly while a write is waiting on the person. Doubles as the
-    /// flag that routes the microphone to a yes/no answer instead of a question.
-    private var pendingConfirmationPrompt: String?
 
     private var handsFreeTask: Task<Void, Never>?
     private var wakeWordTask: Task<Void, Never>?
@@ -128,9 +118,7 @@ final class ConversationViewModel: ObservableObject {
             guard let self else { return }
             switch self.state {
             case .listening: self.endListening()
-            // Awaiting a confirmation also opens the mic — that's how you say
-            // "confirm" without taking the phone out.
-            case .idle, .awaitingConfirmation: self.beginListening()
+            case .idle: self.beginListening()
             case .speaking: self.speech.stop()
             case .working: break
             }
@@ -141,10 +129,8 @@ final class ConversationViewModel: ObservableObject {
     // MARK: - Push to talk
 
     func beginListening() {
-        // Two entry points: idle (a new question) and awaiting confirmation
-        // (answering "confirm" / "cancel" by voice). Everything else is busy.
         switch state {
-        case .idle, .awaitingConfirmation:
+        case .idle:
             break
         case .listening, .working, .speaking:
             return
@@ -186,8 +172,7 @@ final class ConversationViewModel: ObservableObject {
                 self.nowPlaying.resume(reassertCategory: true)
                 self.errorMessage = (error as? LocalizedError)?.errorDescription
                     ?? error.localizedDescription
-                // Don't drop a pending confirmation on the floor if the mic failed.
-                self.state = self.pendingConfirmationPrompt.map(State.awaitingConfirmation) ?? .idle
+                self.state = .idle
             }
         }
     }
@@ -198,12 +183,6 @@ final class ConversationViewModel: ObservableObject {
         Task {
             let text = await recognizer.stopAndAwaitTranscript()
             liveTranscript = ""
-
-            // A pending confirmation turns the mic into a yes/no answer.
-            if pendingConfirmationPrompt != nil {
-                handleSpokenConfirmation(text)
-                return
-            }
 
             guard !text.isEmpty else {
                 // Never end a take in silence. Going idle with nothing to show
@@ -223,7 +202,7 @@ final class ConversationViewModel: ObservableObject {
         recognizer.cancel()
         liveTranscript = ""
         if case .listening = state {
-            state = pendingConfirmationPrompt.map(State.awaitingConfirmation) ?? .idle
+            state = .idle
         }
     }
 
@@ -672,23 +651,17 @@ final class ConversationViewModel: ObservableObject {
 
     func send(_ text: String) async {
         guard !text.isEmpty else { return }
-        // A chosen cloud session wins over the backend setting. Both go
-        // through the relay, but one runs Claude Code on your machine and the
-        // other runs it in Anthropic's cloud, in a session you can open
-        // anywhere.
+        // A chosen cloud session wins. Both go through the relay, but one
+        // runs Claude Code on your machine and the other runs it in
+        // Anthropic's cloud, in a session you can open anywhere.
         if !activeCloudSessionID.isEmpty {
             await sendToCloudSession(text)
             return
         }
-        switch settings.backend {
-        case .relay:
-            await sendViaRelay(text)
-        case .directAPI:
-            await sendViaDirectAPI(text)
-        }
+        await sendViaRelay(text)
     }
 
-    // MARK: - Cloud session backend
+    // MARK: - Cloud sessions
 
     /// Asks a claude.ai cloud session and speaks the answer when it lands.
     ///
@@ -752,7 +725,7 @@ final class ConversationViewModel: ObservableObject {
         }
     }
 
-    // MARK: - Relay backend
+    // MARK: - The relay
 
     /// Asks the relay on your own machine, which runs the Claude Code CLI
     /// against a real checkout. Nothing here is billed per token — see
@@ -876,117 +849,6 @@ final class ConversationViewModel: ObservableObject {
         }
     }
 
-    // MARK: - Direct API backend
-
-    private func sendViaDirectAPI(_ text: String) async {
-        guard let repository = settings.repository else {
-            errorMessage = "Set your repository (owner/repo) in Settings first."
-            state = .idle
-            isShowingSettings = true
-            return
-        }
-        guard KeychainStore.has(.anthropicAPIKey) else {
-            errorMessage = AnthropicError.missingAPIKey.errorDescription
-            state = .idle
-            isShowingSettings = true
-            return
-        }
-        guard KeychainStore.has(.githubToken) else {
-            errorMessage = GitHubError.missingToken.errorDescription
-            state = .idle
-            isShowingSettings = true
-            return
-        }
-
-        append(.init(kind: .user, text: text))
-        session.messages.append(.userText(text))
-        session.model = settings.model.rawValue
-        state = .working("Thinking")
-
-        let repo = RepositoryRef(owner: repository.owner, name: repository.name)
-        let toolExecutor = makeExecutor(for: repo)
-
-        // Fetching the default branch up front lets the system prompt name it,
-        // which measurably reduces "which branch?" round trips.
-        let defaultBranch = try? await toolExecutor.defaultBranch()
-
-        let configuration = AnthropicClient.Configuration(
-            model: settings.model.rawValue,
-            maxTokens: settings.maxTokens,
-            effort: settings.effort.rawValue,
-            system: SystemPrompt.build(
-                owner: repo.owner,
-                repository: repo.name,
-                defaultBranch: defaultBranch,
-                allowWrites: settings.allowWriteTools
-            ),
-            tools: ToolCatalog.tools(allowWrites: settings.allowWriteTools),
-            useStructuredOutput: settings.useStructuredOutput,
-            supportsAdaptiveThinking: settings.model.supportsAdaptiveThinking
-        )
-
-        let runner = AgentRunner(
-            anthropic: anthropic,
-            executor: toolExecutor,
-            allowWrites: settings.allowWriteTools
-        )
-
-        do {
-            var messages = session.messages
-            let result = try await runner.run(
-                messages: &messages,
-                configuration: configuration,
-                onEvent: { [weak self] event in self?.handle(event) },
-                confirm: { [weak self] call in
-                    guard let self else { return false }
-                    return await self.requestConfirmation(for: call)
-                }
-            )
-
-            session.messages = messages
-            session.usage = session.usage + result.usage
-            session.model = result.model
-            append(.init(
-                kind: .assistant,
-                text: result.response.spoken,
-                detail: result.response.detail
-            ))
-            persist()
-
-            state = .speaking
-            if settings.stemPressControl {
-                remoteCommands.publishNowPlaying(title: result.response.spoken, isPlaying: true)
-            }
-            speech.speak(
-                result.response.spoken,
-                engine: settings.voiceEngine,
-                voiceIdentifier: settings.systemVoiceIdentifier,
-                elevenLabsVoiceID: settings.elevenLabsVoiceID,
-                rate: settings.speechRate
-            )
-            await waitForSpeechToFinish()
-            // Only go idle if we're still the ones holding the state — the
-            // person may have interrupted by starting a new question.
-            if case .speaking = state { state = .idle }
-        } catch {
-            // Roll the failed user turn back out of the API history so the next
-            // request isn't rejected for ending on an unanswered user message.
-            session.messages = Array(session.messages.dropLast())
-            let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-            errorMessage = message
-            append(.init(kind: .error, text: message))
-            persist()
-            state = .idle
-            speech.speak(
-                "Something went wrong. Check the screen.",
-                engine: .system,
-                voiceIdentifier: settings.systemVoiceIdentifier,
-                elevenLabsVoiceID: "",
-                rate: settings.speechRate
-            )
-        }
-    }
-
     private func waitForSpeechToFinish() async {
         // Give the synthesizer a beat to start before we watch for it to stop.
         try? await Task.sleep(nanoseconds: 200_000_000)
@@ -995,92 +857,11 @@ final class ConversationViewModel: ObservableObject {
         }
     }
 
-    // MARK: - Agent events
-
-    private func handle(_ event: AgentEvent) {
-        switch event {
-        case .thinking:
-            state = .working("Thinking")
-        case .toolStarted(let name, let detail):
-            let label = name.replacingOccurrences(of: "_", with: " ")
-            state = .working(detail.isEmpty ? label : "\(label): \(detail)")
-            append(.init(kind: .tool, text: detail.isEmpty ? label : "\(label) — \(detail)"))
-        case .toolFinished(let name, let succeeded):
-            if !succeeded {
-                append(.init(kind: .status, text: "\(name) failed; Claude will adapt."))
-            }
-        case .awaitingConfirmation(let prompt):
-            state = .awaitingConfirmation(prompt)
-        case .confirmationDeclined(let name):
-            append(.init(kind: .status, text: "Declined \(name)."))
-        }
-    }
-
-    // MARK: - Write confirmation
-
-    private func requestConfirmation(for call: ToolCall) async -> Bool {
-        let prompt = ToolCatalog.confirmationPrompt(for: call)
-        pendingConfirmationPrompt = prompt
-        state = .awaitingConfirmation(prompt)
-        append(.init(kind: .status, text: prompt))
-
-        if settings.speakConfirmations {
-            speech.speak(
-                prompt,
-                engine: settings.voiceEngine,
-                voiceIdentifier: settings.systemVoiceIdentifier,
-                elevenLabsVoiceID: settings.elevenLabsVoiceID,
-                rate: settings.speechRate
-            )
-        }
-
-        return await withCheckedContinuation { continuation in
-            confirmationContinuation = continuation
-        }
-    }
-
-    /// Called by the Confirm / Cancel buttons.
-    func resolveConfirmation(_ approved: Bool) {
-        speech.stop()
-        pendingConfirmationPrompt = nil
-        guard let continuation = confirmationContinuation else { return }
-        confirmationContinuation = nil
-        state = .working(approved ? "Applying" : "Cancelling")
-        continuation.resume(returning: approved)
-    }
-
-    /// Called when the person answers a confirmation by voice.
-    private func handleSpokenConfirmation(_ text: String) {
-        let normalized = text.lowercased()
-        let approvals = ["confirm", "yes", "do it", "go ahead", "approve", "yep", "sure"]
-        let rejections = ["no", "cancel", "stop", "don't", "do not", "nope", "abort"]
-
-        if rejections.contains(where: { normalized.contains($0) }) {
-            resolveConfirmation(false)
-        } else if approvals.contains(where: { normalized.contains($0) }) {
-            resolveConfirmation(true)
-        } else {
-            // Ambiguous — ask once more rather than guessing on a write.
-            if let prompt = pendingConfirmationPrompt {
-                state = .awaitingConfirmation(prompt)
-            }
-            speech.speak(
-                "I didn't catch that. Say confirm or cancel.",
-                engine: settings.voiceEngine,
-                voiceIdentifier: settings.systemVoiceIdentifier,
-                elevenLabsVoiceID: settings.elevenLabsVoiceID,
-                rate: settings.speechRate
-            )
-        }
-    }
-
     // MARK: - Session management
 
     func newSession() {
         speech.stop()
         cancelListening()
-        // A dangling confirmation would leak its continuation forever.
-        if confirmationContinuation != nil { resolveConfirmation(false) }
         streamingEntryID = nil
         streamedSoFar = ""
         // Keep the old conversation. This used to delete it, which meant a
@@ -1112,7 +893,6 @@ final class ConversationViewModel: ObservableObject {
         guard id != session.id else { return }
         speech.stop()
         cancelListening()
-        if confirmationContinuation != nil { resolveConfirmation(false) }
         streamingEntryID = nil
         streamedSoFar = ""
 
@@ -1162,14 +942,6 @@ final class ConversationViewModel: ObservableObject {
     }
 
     // MARK: - Internals
-
-    private func makeExecutor(for repo: RepositoryRef) -> ToolExecutor {
-        if let executor, executorRepoSlug == repo.slug { return executor }
-        let fresh = ToolExecutor(client: github, repo: repo)
-        executor = fresh
-        executorRepoSlug = repo.slug
-        return fresh
-    }
 
     private func append(_ entry: TranscriptEntry) {
         session.transcript.append(entry)

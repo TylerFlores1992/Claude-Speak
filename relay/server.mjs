@@ -569,16 +569,6 @@ function readHead(path, maxBytes = 64 * 1024) {
   }
 }
 
-/** The last few useful lines of a failed CLI run. */
-function teleportError(error) {
-  return (error.stderr || error.stdout || error.message || "")
-    .split("\n")
-    .filter(Boolean)
-    .slice(-4)
-    .join(" ")
-    .trim();
-}
-
 /** JSON response in one line, since the cloud endpoints send several. */
 function respond(res, status, payload) {
   res.writeHead(status, { "content-type": "application/json" });
@@ -812,71 +802,6 @@ function authorizedForAnswer(req) {
 // phone. A feature that cannot report what it is doing is not one this app can
 // use.
 
-let remoteControl = null; // { child, url, startedAt }
-
-/** The claude.ai session URL, once the server prints one. */
-function extractSessionURL(text) {
-  const match = String(text).match(/https:\/\/claude\.ai\/code\/[A-Za-z0-9_-]+/);
-  return match ? match[0] : null;
-}
-
-function startRemoteControl(cwd) {
-  if (remoteControl?.child && remoteControl.child.exitCode === null) {
-    return remoteControl;
-  }
-
-  const child = spawn(CLAUDE_BIN, ["remote-control"], {
-    cwd,
-    env: process.env,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-
-  remoteControl = { child, url: null, startedAt: new Date().toISOString(), error: null };
-
-  // The URL is printed, not returned, so it has to be read out of the output.
-  const read = (chunk) => {
-    const text = chunk.toString();
-    const url = extractSessionURL(text);
-    if (url && remoteControl) remoteControl.url = url;
-  };
-  child.stdout.on("data", read);
-  child.stderr.on("data", (chunk) => {
-    read(chunk);
-    // Eligibility failures land here, and they are the common case: Remote
-    // Control is a research preview behind a feature flag. Keeping the text
-    // means the phone can show the real reason instead of "it didn't work".
-    if (remoteControl) {
-      remoteControl.error = (remoteControl.error ?? "") + chunk.toString();
-    }
-  });
-  child.on("exit", (code) => {
-    if (remoteControl?.child === child) remoteControl.exited = code;
-  });
-
-  return remoteControl;
-}
-
-function remoteControlStatus() {
-  if (!remoteControl) return { running: false };
-  const running = remoteControl.child && remoteControl.child.exitCode === null;
-  return {
-    running: Boolean(running),
-    url: remoteControl.url,
-    startedAt: remoteControl.startedAt,
-    exited: remoteControl.exited ?? null,
-    // Last few lines only: the whole stderr of a failed launch is a wall.
-    error: (remoteControl.error ?? "").split("\n").filter(Boolean).slice(-4).join(" ").trim() || null,
-  };
-}
-
-function stopRemoteControl() {
-  if (remoteControl?.child && remoteControl.child.exitCode === null) {
-    remoteControl.child.kill();
-  }
-  remoteControl = null;
-  return { running: false };
-}
-
 // Remembered cloud sessions.
 //
 // There is no way to list cloud sessions - `claude agents --json` covers local
@@ -1040,53 +965,21 @@ function rememberCloudSession(id, { title = null, project = null, cwd = null } =
   saveCloud(state);
 }
 
-/** Every local session id superseded by a later teleport of the same session. */
+/**
+ * Local session ids left behind by teleport, back when it existed.
+ *
+ * Teleport made a new local copy each time rather than updating the old one,
+ * so those copies are filtered out of the session list. Nothing writes these
+ * any more -- the feature is gone -- but state written before it went still
+ * has them, and showing a pile of duplicate rows to anyone who used it would
+ * be a strange parting gift.
+ */
 function supersededLocalIds() {
   const ids = new Set();
   for (const entry of Object.values(loadCloud())) {
     for (const id of entry.previousIds ?? []) ids.add(id);
   }
   return ids;
-}
-
-/**
- * Teleports one cloud session and records where it landed.
- *
- * The landing spot is found by diffing the local session list either side of
- * the run, because the CLI does not report the local id it created. A diff is
- * imprecise if something else writes a session at the same moment; the cost of
- * being wrong is one stale row left visible, so it is not worth more than this.
- */
-function teleportAndRecord(sessionId, cwd) {
-  const before = new Set(listSessions({ limit: 500 }).map((s) => s.id));
-
-  execFileSync(CLAUDE_BIN, teleportArgs(sessionId), {
-    cwd,
-    encoding: "utf8",
-    timeout: 180_000,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-
-  const after = listSessions({ limit: 500 });
-  const fresh = after.find((s) => !before.has(s.id));
-
-  const state = loadCloud();
-  const existing = state[sessionId] ?? { previousIds: [] };
-  const previousIds = existing.previousIds ?? [];
-  // The copy this refresh replaces becomes a previous one.
-  if (existing.localId && existing.localId !== fresh?.id) {
-    previousIds.push(existing.localId);
-  }
-  state[sessionId] = {
-    localId: fresh?.id ?? existing.localId ?? null,
-    project: fresh?.project ?? existing.project ?? null,
-    title: fresh?.title ?? existing.title ?? null,
-    cwd,
-    previousIds,
-    updatedAt: new Date().toISOString(),
-  };
-  saveCloud(state);
-  return state[sessionId];
 }
 
 /**
@@ -1151,16 +1044,6 @@ function explainCloudFailure(raw) {
     );
   }
   return text.split("\n").filter(Boolean).slice(-3).join(" ").trim();
-}
-
-/** Arguments for starting a new cloud session with a first task. */
-function cloudStartArgs(task) {
-  return ["--cloud", task, "--output-format", "json"];
-}
-
-/** Arguments for pulling a cloud session onto this machine. */
-function teleportArgs(sessionId) {
-  return ["--teleport", sessionId];
 }
 
 // --- Session titles --------------------------------------------------------
@@ -1528,66 +1411,6 @@ const server = createServer((req, res) => {
     return;
   }
 
-  if (req.method === "POST" && req.url === "/cloud/start") {
-    readJSON(req)
-      .then((body) => {
-        const task = typeof body.text === "string" ? body.text.trim() : "";
-        if (!task) return respond(res, 400, { error: "Say what the session should do." });
-
-        const cwd = resolveProject(typeof body.project === "string" ? body.project : "");
-        if (!cwd) return respond(res, 400, { error: "Unknown workspace." });
-
-        let output;
-        try {
-          // Run from a checkout, because --cloud clones the current
-          // directory's GitHub remote at the current branch. Which repository
-          // the session works on is decided by where this runs, not by a flag.
-          output = execFileSync(CLAUDE_BIN, cloudStartArgs(task), {
-            cwd,
-            encoding: "utf8",
-            timeout: 180_000,
-            stdio: ["ignore", "pipe", "pipe"],
-          });
-        } catch (error) {
-          return respond(res, 502, {
-            error: explainCloudFailure(error.stderr || error.stdout || error.message),
-          });
-        }
-
-        const parsed = (() => {
-          try {
-            return JSON.parse(output);
-          } catch {
-            return null;
-          }
-        })();
-        const sessionId = normalizeCloudId(parsed?.session_id ?? "");
-        if (!sessionId) {
-          return respond(res, 502, {
-            error: "The session started but the CLI did not report an id, so nothing here can follow it.",
-          });
-        }
-
-        // Remembered on both counts: its answers are wanted, and it joins the
-        // list the phone can refresh. Starting a session is a stronger signal
-        // of interest than pasting a link.
-        markAsked(sessionId);
-        rememberCloudSession(sessionId, {
-          title: firstLine(task),
-          project: basename(cwd),
-          cwd,
-        });
-
-        respond(res, 200, {
-          sessionId,
-          url: parsed?.url ?? `https://claude.ai/code/${sessionId}`,
-          title: firstLine(task),
-        });
-      })
-      .catch((error) => respond(res, 400, { error: error.message }));
-    return;
-  }
-
   if (req.method === "POST" && req.url === "/cloud/ask") {
     readJSON(req)
       .then(async (body) => {
@@ -1681,29 +1504,6 @@ const server = createServer((req, res) => {
     return;
   }
 
-  if (req.method === "POST" && req.url === "/teleport") {
-    readJSON(req)
-      .then((body) => {
-        const sessionId = parseCloudSessionId(body.sessionId);
-        if (!sessionId) return respond(res, 400, { error: "That doesn't look like a cloud session id." });
-
-        const cwd = resolveProject(typeof body.project === "string" ? body.project : "");
-        if (!cwd) return respond(res, 400, { error: "Unknown workspace." });
-
-        try {
-          // No stdin anywhere below: teleport prompts to stash uncommitted
-          // changes, and a prompt nobody can answer would hang until the
-          // timeout. Closing stdin makes it fail fast, and the message says why.
-          const record = teleportAndRecord(sessionId, cwd);
-          respond(res, 200, { ok: true, sessionId, ...record });
-        } catch (error) {
-          respond(res, 502, { error: teleportError(error) });
-        }
-      })
-      .catch((error) => respond(res, 400, { error: error.message }));
-    return;
-  }
-
   if (req.method === "POST" && req.url === "/sessions/archive") {
     readJSON(req)
       .then((body) => {
@@ -1746,33 +1546,6 @@ const server = createServer((req, res) => {
         respond(res, 200, { ok: true, deleted: id });
       })
       .catch((error) => respond(res, 400, { error: error.message }));
-    return;
-  }
-
-  if (req.method === "GET" && req.url === "/remote-control") {
-    respond(res, 200, remoteControlStatus());
-    return;
-  }
-
-  if (req.method === "POST" && req.url === "/remote-control") {
-    readJSON(req)
-      .then((body) => {
-        const cwd = resolveProject(typeof body.project === "string" ? body.project : "");
-        if (!cwd) return respond(res, 400, { error: "Unknown workspace." });
-        startRemoteControl(cwd);
-        // The URL arrives on stdout a moment after launch, so the first status
-        // often has none. Reported as-is rather than waited for: a request that
-        // blocks on a subprocess printing something is a request that hangs
-        // when it does not.
-        setTimeout(() => {}, 0);
-        respond(res, 200, remoteControlStatus());
-      })
-      .catch((error) => respond(res, 400, { error: error.message }));
-    return;
-  }
-
-  if (req.method === "POST" && req.url === "/remote-control/stop") {
-    respond(res, 200, stopRemoteControl());
     return;
   }
 
@@ -1856,39 +1629,6 @@ const server = createServer((req, res) => {
         updatedAt: entry.updatedAt ?? null,
       })),
     });
-    return;
-  }
-
-  if (req.method === "POST" && req.url === "/cloud/refresh") {
-    readJSON(req)
-      .then((body) => {
-        const state = loadCloud();
-        // One named session, or every remembered one. Refreshing all is the
-        // "one click" case and is why this is a list rather than a flag.
-        const only = body.sessionId ? parseCloudSessionId(body.sessionId) : null;
-        if (body.sessionId && !only) {
-          return respond(res, 400, { error: "That doesn't look like a cloud session id." });
-        }
-        const targets = only ? [only] : Object.keys(state);
-        if (!targets.length) {
-          return respond(res, 200, { results: [], note: "No cloud sessions have been brought here yet." });
-        }
-
-        // Reported per session, never as one pass/fail: a repository with
-        // uncommitted changes fails teleport, and one such repository should
-        // not hide the others that refreshed cleanly.
-        const results = targets.map((cloudId) => {
-          const cwd = state[cloudId]?.cwd ?? REPO;
-          try {
-            const record = teleportAndRecord(cloudId, cwd);
-            return { cloudId, ok: true, localId: record.localId, title: record.title };
-          } catch (error) {
-            return { cloudId, ok: false, error: teleportError(error) };
-          }
-        });
-        respond(res, 200, { results });
-      })
-      .catch((error) => respond(res, 400, { error: error.message }));
     return;
   }
 
@@ -2006,10 +1746,7 @@ export {
   rememberCloudSession,
   loadTranscript,
   appendTranscript,
-  extractSessionURL,
   parseCloudSessionId,
   cloudSendArgs,
-  cloudStartArgs,
   explainCloudFailure,
-  teleportArgs,
 };

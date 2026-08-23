@@ -33,12 +33,9 @@ import {
   resolveSessionCwd,
   sessionFilePath,
   parseLiveIds,
-  extractSessionURL,
   parseCloudSessionId,
   cloudSendArgs,
-  cloudStartArgs,
   explainCloudFailure,
-  teleportArgs,
 } from "./server.mjs";
 
 const SERVER = fileURLToPath(new URL("./server.mjs", import.meta.url));
@@ -855,7 +852,7 @@ test("refuses empty, short, and non-string input", () => {
   }
 });
 
-test("builds the documented cloud and teleport commands", () => {
+test("builds the documented cloud send command", () => {
   // The message is absent on purpose: it goes in on stdin. Passing it as the
   // value of -p failed with "Input must be provided either through stdin or as
   // a prompt argument", because the relay spawns with stdin ignored -- an
@@ -864,17 +861,6 @@ test("builds the documented cloud and teleport commands", () => {
     cloudSendArgs("session_01abcdef2345"),
     ["-p", "--cloud", "session_01abcdef2345", "--output-format", "json"]
   );
-  assert.deepEqual(teleportArgs("session_01abcdef2345"), ["--teleport", "session_01abcdef2345"]);
-});
-
-test("starting a cloud session asks for a parseable result", () => {
-  // --output-format json is what makes the new session's id readable. Without
-  // it the CLI prints prose and the relay has nothing to follow the session by.
-  const args = cloudStartArgs("fix the flaky test");
-  assert.deepEqual(args, ["--cloud", "fix the flaky test", "--output-format", "json"]);
-  // The task sits directly after --cloud as its value, so a task that begins
-  // with a dash is still a task.
-  assert.equal(cloudStartArgs("--help")[1], "--help");
 });
 
 test("the TTY refusal is explained rather than dumped", () => {
@@ -942,33 +928,6 @@ test("live ids are found across plausible schemas", () => {
 test("garbage output means nothing is live, not a crash", () => {
   for (const raw of ["", "not json", "42", "null", "{}", '[{"name":"x"}]']) {
     assert.equal(parseLiveIds(raw).size, 0, `failed on ${JSON.stringify(raw)}`);
-  }
-});
-
-// --- Remote Control --------------------------------------------------------
-//
-// The server prints its session URL rather than returning it, so the relay has
-// to read it out of the output. Worth testing because the surrounding text
-// changes between versions and a wrong match would hand the phone a link to
-// nothing.
-
-test("finds the session URL in the server's output", () => {
-  assert.equal(
-    extractSessionURL("Remote Control active: https://claude.ai/code/session_01AbCd"),
-    "https://claude.ai/code/session_01AbCd"
-  );
-  // Query strings are printed in some forms and are not part of the link.
-  assert.equal(
-    extractSessionURL("View: https://claude.ai/code/cse_01AbCd?from=cli&m=0"),
-    "https://claude.ai/code/cse_01AbCd"
-  );
-});
-
-test("returns null when there is no URL yet", () => {
-  // Startup prints several lines before the URL; a false match here would show
-  // a dead link on the phone.
-  for (const line of ["", "Starting Remote Control...", "Signed in as tyler", "https://claude.ai/"]) {
-    assert.equal(extractSessionURL(line), null, `matched ${JSON.stringify(line)}`);
   }
 });
 
