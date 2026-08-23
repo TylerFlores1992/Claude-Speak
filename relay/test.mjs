@@ -24,6 +24,9 @@ import {
   awaitAnswer,
   markAsked,
   wasAsked,
+  loadNames,
+  saveNames,
+  cleanName,
   loadTranscript,
   appendTranscript,
   requestHistory,
@@ -725,6 +728,43 @@ test("the same thing said twice in a row is recorded once", () => {
   appendTranscript("session_01DUP", "user", "and the other one?");
   appendTranscript("session_01DUP", "assistant", "Done.");
   assert.equal(loadTranscript("session_01DUP").length, 3);
+});
+
+// --- Renaming ---------------------------------------------------------------
+//
+// A name typed on a phone is an instruction, not a guess, so it is kept apart
+// from the generated-title cache and outranks it.
+
+test("a name is trimmed, collapsed, and bounded", () => {
+  assert.equal(cleanName("  Camp   work  "), "Camp work");
+  assert.equal(cleanName("a\n\nb"), "a b");
+  assert.equal(cleanName("x".repeat(200)).length, 80);
+});
+
+test("anything that is not a string is not a name", () => {
+  for (const value of [null, undefined, 42, {}, []]) {
+    assert.equal(cleanName(value), "", String(value));
+  }
+});
+
+test("an empty name is how you ask for the default back", () => {
+  // The endpoint deletes the entry rather than storing "", so the row falls
+  // back through the same chain as a session that was never renamed.
+  assert.equal(cleanName("   "), "");
+});
+
+test("names survive a round trip and are read back per session", () => {
+  saveNames({ "session-a": "Camp work", "session-b": "Relay notes" });
+  const names = loadNames();
+  assert.equal(names["session-a"], "Camp work");
+  assert.equal(names["session-b"], "Relay notes");
+  assert.equal(names["session-c"], undefined);
+});
+
+test("an unreadable names file means no names, not a crash", () => {
+  // Same rule as the title cache: the session list must not go down with it.
+  saveNames({ kept: "yes" });
+  assert.equal(loadNames().kept, "yes");
 });
 
 // --- Pulling a session's own history ---------------------------------------

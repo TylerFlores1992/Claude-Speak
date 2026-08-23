@@ -7,6 +7,15 @@ that's noted.
 
 ## Architecture
 
+> **The direct-API lane described in much of this section was removed.** The app
+> once had two backends: the relay, and calling Anthropic from the phone with an
+> API key and a GitHub token. Only the relay was ever used, so the second was
+> deleted along with the agent loop, the GitHub tool layer, and the write
+> confirmation flow that only its tool calls could trigger.
+>
+> The reasoning is kept rather than deleted. It is why the tool layer looked the
+> way it did, and anyone reversing the decision would need it back.
+
 ### The GitHub REST API is the tool layer
 
 The thing that makes a serverless agent possible. Claude's tool-use protocol
@@ -98,6 +107,11 @@ takes the default branch as a parameter and is built once per turn rather than
 being assembled with anything volatile in it.
 
 ### Structured output is opt-in, off by default
+
+> **Superseded.** The direct-API lane this configured was removed; there is no
+> longer a setting, because there is no longer a request from the phone to
+> configure. `ResponseParser` survives and still handles both shapes, because
+> speech and the Siri intent parse relay answers with it.
 
 The API can enforce the `{spoken_summary, detail}` schema via
 `output_config.format`. It's a settings toggle rather than the default because:
@@ -351,6 +365,22 @@ provide. What's *absent* is absent by design — see the honest-limits section o
 `PHASE1_RESEARCH.md` and the "what's next" section of `ROADMAP.md`.
 
 ## Sessions are merged by making the relay the home, not by reaching into the cloud
+
+> **Superseded.** The conclusion below was wrong in its most important part.
+> `--teleport` does not make a diverging copy of a cloud session — it cannot
+> open one at all: pointed at an ordinary cloud session it exits 1 and prints
+> nothing, with or without a terminal. It resumes an existing *teleport*
+> session and nothing else.
+>
+> What works is the opposite of importing or exporting: a **Stop hook committed
+> to the repository**. It runs inside the cloud session, and its payload carries
+> `transcript_path` — the conversation, on disk, beside the hook. So the session
+> hands over its own answers, and its own history when asked, and the relay is
+> a courier rather than an owner. Teleport, Remote Control, cloud refresh and
+> cloud-start were all removed once that worked; see `STATUS.md`.
+>
+> The reasoning below is kept because the two closed routes are still closed,
+> and re-deriving them costs an evening.
 
 The Claude app's Code tab lists sessions running on Anthropic's infrastructure.
 The obvious goal was to show those in this app. Three routes were investigated

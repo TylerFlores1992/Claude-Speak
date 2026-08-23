@@ -457,14 +457,17 @@ final class ConversationViewModel: ObservableObject {
         session.relaySessionID == nil ? activeProject : ""
     }
 
-    /// Sessions and workspaces from the relay, for the dashboard.
-    func relayCatalog() async throws -> ([RelaySession], [RelayProject]) {
+    /// The relay's own sessions, for the dashboard.
+    ///
+    /// Workspaces used to be fetched alongside these, to fill a picker asking
+    /// which one a new session should start in. Nothing asks that any more:
+    /// repository work starts in the Claude app and arrives here as a cloud
+    /// session, and what the relay starts is a chat.
+    func relaySessions() async throws -> [RelaySession] {
         guard let client = RelayClient.make(settings: settings) else {
             throw RelayError.notConfigured
         }
-        async let sessions = client.sessions()
-        async let projects = client.projects()
-        return try await (sessions, projects)
+        return try await client.sessions()
     }
 
     /// Hides a session from the dashboard without touching its transcript.
@@ -473,6 +476,25 @@ final class ConversationViewModel: ObservableObject {
             throw RelayError.notConfigured
         }
         try await client.archiveSession(id: id)
+    }
+
+    /// Renames a session on the relay machine. An empty name restores the default.
+    func renameSession(id: String, title: String) async throws {
+        guard let client = RelayClient.make(settings: settings) else {
+            throw RelayError.notConfigured
+        }
+        try await client.renameSession(id: id, title: title)
+    }
+
+    /// Renames a cloud session in the list. The session on claude.ai is untouched.
+    func renameCloudSession(id: String, title: String) async throws {
+        guard let client = RelayClient.make(settings: settings) else {
+            throw RelayError.notConfigured
+        }
+        try await client.renameCloudSession(id: id, title: title)
+        if id == activeCloudSessionID {
+            cloudSessionTitle = title.isEmpty ? nil : title
+        }
     }
 
     /// Deletes a session's transcript on the relay machine. Not undoable.
@@ -875,48 +897,7 @@ final class ConversationViewModel: ObservableObject {
         errorMessage = nil
     }
 
-    // MARK: - Session history
-
-    /// Everything saved, newest first. Reads the session directory, so call it
-    /// when the list is shown rather than keeping it live.
-    func sessionSummaries() -> [SessionSummary] {
-        // Include the open conversation, which may not be on disk yet.
-        var summaries = store.summaries().filter { $0.id != session.id }
-        if !session.isEmpty {
-            summaries.insert(SessionSummary(session), at: 0)
-        }
-        return summaries.sorted(by: SessionSummary.newestFirst)
-    }
-
-    /// Opens a previous conversation, saving the current one first.
-    func switchToSession(id: UUID) {
-        guard id != session.id else { return }
-        speech.stop()
-        cancelListening()
-        streamingEntryID = nil
-        streamedSoFar = ""
-
-        store.save(session)
-        guard let restored = store.load(id: id) else {
-            errorMessage = "That conversation could not be opened."
-            return
-        }
-        session = restored
-        state = .idle
-        errorMessage = nil
-    }
-
-    func deleteSession(id: UUID) {
-        store.delete(id: id)
-        // Deleting the conversation you're in leaves you on a blank one.
-        if id == session.id {
-            speech.stop()
-            streamingEntryID = nil
-            streamedSoFar = ""
-            session = Session(model: settings.model.rawValue)
-            state = .idle
-        }
-    }
+    // MARK: - Speaking again
 
     func repeatLastAnswer() {
         guard let last = session.transcript.last(where: { $0.kind == .assistant }) else { return }

@@ -158,10 +158,6 @@ the internet. Treat it that way:
 
 Ordered by value per hour of work.
 
-**Repository picker.** One repo at a time, typed as `owner/repo`, is the most
-obviously temporary thing in the app. `GET /user/repos` plus a searchable list
-and a recents section — half a day, removes a daily annoyance.
-
 **Prompt-cache the tool definitions explicitly.** The system block carries a
 breakpoint; the tool array renders before it and is cached along with it, but a
 second breakpoint would make the boundary explicit and survive a future refactor
@@ -211,17 +207,16 @@ can glance at progress without unlocking.
 
 **Next, in order of what unblocks the most:**
 
-1. Run `claude remote-control` on the relay machine. It decides whether the
-   session-merging direction is available at all, and nothing further should be
-   built on it until that is known.
-2. Test `Bring it here` against a real claude.ai session link — the first actual
-   exercise of `/teleport`.
-3. Scaffold repo-committed configuration for the target repository: a
+1. Sweep for swallowed errors. Three bugs in one evening were the same shape:
+   `try?` then `?? []`, the error discarded, and an empty state shown that read
+   as "nothing here" instead of "something failed". More instances remain.
+2. Scaffold repo-committed configuration for the target repository: a
    `.claude/settings.json` SessionStart hook plus a setup script, so environment
    setup travels with the checkout into both cloud sessions and relay sessions.
    This is the supported substitute for editing cloud environments, which has no
    API.
 
 **Ruled out, with reasons, in `STATUS.md`:** listing cloud sessions, attaching
-to a live cloud session, the AirPod stem press while locked, foregrounding the
-phone app from the watch, and editing cloud environments programmatically.
+to a live cloud session, fetching a cloud session with `--teleport`, the AirPod
+stem press while locked, foregrounding the phone app from the watch, and editing
+cloud environments programmatically.

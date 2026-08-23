@@ -39,19 +39,34 @@ Be honest about these rather than describing them as working:
   acquisition, which is what caused early locked-screen crashes. If takes start
   failing with music on, that is the suspect.
 
-## Removed from the app
+## Removed
 
-Cut once teleport was proven dead, because each was reachable only through the
-sheet teleport lived in, or existed only to serve it: the "Bring it here"
-teleport flow, the Remote Control toggle, cloud-session refresh (which
+**From the app and the relay both**, once teleport was proven dead: the "Bring
+it here" teleport flow, the Remote Control toggle, cloud-session refresh (which
 re-teleported), and starting a cloud session from the phone (which the CLI
-refuses without a terminal). The relay still serves those endpoints; nothing
-calls them.
+refuses without a terminal). The relay routes `/teleport`, `/remote-control`,
+`/remote-control/stop`, `/cloud/refresh` and `/cloud/start` are gone with them.
 
-Also cut from the UI: the composer's `claude.ai` chip (its only other job,
-leaving the session, now happens automatically), the conversation's
-new-session toolbar icon (still in the actions menu), and the dashboard's
-back-to-current-conversation shortcut.
+**The direct-API lane.** The app had two backends: the relay, and calling
+Anthropic from the phone with an API key and a GitHub token. Only the relay was
+ever used, so the second went, taking `AnthropicClient`, `AgentRunner`,
+`ToolExecutor`, `ToolCatalog`, `GitHubClient`, the system prompt, and the write
+confirmation flow that only its tool calls could trigger. Settings lost the
+backend picker and the credentials, repository and model sections.
+
+The Anthropic key and GitHub token are kept as retired Keychain cases and
+deleted at launch: removing the feature does not remove what it stored, and
+dropping the cases would have stranded two real secrets on the device with
+nothing able to name them.
+
+**From the UI:** the composer's `claude.ai` chip (its only other job, leaving
+the session, now happens automatically), the conversation's new-session toolbar
+icon (still in the actions menu), and the dashboard's back-to-current-conversation
+shortcut.
+
+This reverses part of the original brief, which asked for tests on the GitHub
+API client and the tool-call layer: that code is gone, so those tests are too.
+`ResponseParser` and its tests survive — speech and the Siri intent use it.
 
 ## Known dead ends, with the reason
 

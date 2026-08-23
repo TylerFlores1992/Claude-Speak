@@ -38,18 +38,6 @@ struct CloudSession: Identifiable, Equatable, Sendable {
     var displayTitle: String { title ?? cloudID }
 }
 
-/// Somewhere a new session can run.
-struct RelayProject: Identifiable, Equatable, Sendable {
-    let name: String
-    let path: String
-    /// "code" for a checkout, "scratch" for the empty directory used by Chat.
-    let kind: String
-    let available: Bool
-
-    var id: String { name }
-    var isScratch: Bool { kind == "scratch" }
-}
-
 extension RelayClient {
     /// Every Claude Code session on the relay machine, newest first.
     func sessions() async throws -> [RelaySession] {
@@ -71,20 +59,6 @@ extension RelayClient {
                 // every session as 1970.
                 updatedAt: formatter.date(from: stamp) ?? plain.date(from: stamp) ?? .distantPast,
                 isLive: entry["live"]?.boolValue ?? false
-            )
-        }
-    }
-
-    /// Workspaces a new session can be started in.
-    func projects() async throws -> [RelayProject] {
-        let json = try await getJSON(path: "projects")
-        return (json["projects"]?.arrayValue ?? []).compactMap { entry in
-            guard let name = entry["name"]?.stringValue else { return nil }
-            return RelayProject(
-                name: name,
-                path: entry["path"]?.stringValue ?? "",
-                kind: entry["kind"]?.stringValue ?? "code",
-                available: entry["available"]?.boolValue ?? true
             )
         }
     }
@@ -193,6 +167,36 @@ extension RelayClient {
             project: nil,
             updatedAt: Date()
         )
+    }
+
+    /// Renames a session on the relay machine.
+    ///
+    /// An empty name puts the default back, whatever that was — a title set
+    /// with `/rename` in the session, a generated one, or the first question.
+    func renameSession(id: String, title: String) async throws {
+        let json = try await post(
+            path: "sessions/rename",
+            body: ["id": .string(id), "title": .string(title)],
+            timeout: 20
+        )
+        if let problem = json["error"]?.stringValue, !problem.isEmpty {
+            throw RelayError.relay(problem)
+        }
+    }
+
+    /// Renames a cloud session in this list.
+    ///
+    /// The session on claude.ai is untouched: this is the label on a row here,
+    /// not its name over there.
+    func renameCloudSession(id: String, title: String) async throws {
+        let json = try await post(
+            path: "cloud/rename",
+            body: ["sessionId": .string(id), "title": .string(title)],
+            timeout: 20
+        )
+        if let problem = json["error"]?.stringValue, !problem.isEmpty {
+            throw RelayError.relay(problem)
+        }
     }
 
     /// Drops a session from the list. The session itself is untouched — it
