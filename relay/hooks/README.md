@@ -182,6 +182,34 @@ Two escape hatches:
 - `RELAY_ANSWER_ALL=1` on the relay accepts every session. Same effect from the
   other end.
 
+## Pulling a session's history
+
+The relay cannot read a cloud session's past. There is no API for it, and
+`--teleport` only resumes an existing *teleport* session — pointed at an
+ordinary cloud session it exits 1 with no output.
+
+But this hook runs **inside** that session, and its payload carries
+`transcript_path`: the conversation, on disk, next to the hook. So the pull
+works the other way round. Tapping "History" in the app leaves a note on the
+relay; the probe the hook already makes at the end of every turn is where it
+finds out, and it posts the transcript back with the reply.
+
+That means a pull **sends no message and starts no turn**. Nothing about it
+appears in the conversation on claude.ai. It rides along with the session's
+next reply, which is almost always the next thing you say to it.
+
+What gets sent is only the plain user and assistant text. Tool calls,
+attachments, and bookkeeping records are skipped — they are the bulk of the
+file, they are meaningless without the tooling that produced them, and they are
+the records most likely to be carrying a file, a command, or a key that has no
+business leaving the VM for a phone's reference pane.
+
+It is capped at the most recent 200 messages and 400 KB, trimmed from the older
+end, so one pull is one request no matter how long the session has been running.
+
+The `wanted` gate applies to history exactly as it does to answers: a relay that
+never asked for a session's history never receives it.
+
 ## Why the hook is silent by default
 
 It runs in **every** session that repository is opened in, most of which are

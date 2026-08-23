@@ -228,6 +228,33 @@ struct ConversationScreen: View {
                         .foregroundStyle(Color.accentColor)
                     }
                     .accessibilityLabel("On claude.ai. Tap to go back to the relay.")
+
+                    // Only while there is history left to bring over. Once the
+                    // conversation is on screen there is nothing more to fetch,
+                    // and a button that repeats what it already did is the kind
+                    // of thing you tap twice wondering whether it worked.
+                    if viewModel.canPullHistory {
+                        Button {
+                            Task { await viewModel.pullCloudHistory() }
+                        } label: {
+                            HStack(spacing: 5) {
+                                Image(systemName: viewModel.pullPending
+                                    ? "clock.arrow.circlepath"
+                                    : "arrow.down.circle")
+                                    .font(.caption2)
+                                Text(viewModel.pullPending ? "Pulling" : "History")
+                                    .font(.subheadline.weight(.medium))
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 9)
+                            .background(Color.pcIconWell, in: Capsule())
+                            .foregroundStyle(.primary)
+                        }
+                        .disabled(viewModel.pullPending)
+                        .accessibilityLabel(viewModel.pullPending
+                            ? "History requested. It arrives with the next reply."
+                            : "Bring this session's conversation over from claude.ai for reference.")
+                    }
                 }
 
                 ChipMenu(title: modelChipTitle, systemImage: "sparkle") {
