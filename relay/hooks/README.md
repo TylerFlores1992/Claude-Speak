@@ -111,8 +111,12 @@ environment dialog:
 
 | Variable | Value |
 |---|---|
-| `RELAY_ANSWER_URL` | `https://<your-funnel-host>/cloud/answer` |
+| `RELAY_ANSWER_URL` | `https://<your-funnel-host>/answer` |
 | `RELAY_ANSWER_TOKEN` | the token from step 2 |
+
+The URL ends in `/answer`, the path the funnel publishes — not `/cloud/answer`,
+which is the route it forwards to on the relay. Getting this wrong is silent:
+the hook posts, Funnel 404s, and the hook swallows it as designed.
 
 ## Check it
 

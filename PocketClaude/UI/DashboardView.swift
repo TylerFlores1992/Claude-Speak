@@ -487,7 +487,12 @@ struct DashboardView: View {
     }
 
     private func loadCloudSessions() async {
-        cloudSessions = (try? await viewModel.cloudSessions()) ?? []
+        // Keep what is already on screen if the relay does not answer. The
+        // previous version replaced the list with nothing on any failure, so a
+        // momentary hiccup on the way back to this screen looked exactly like
+        // a session that had failed to save.
+        guard let found = try? await viewModel.cloudSessions() else { return }
+        cloudSessions = found
     }
 
     private func refreshCloud() async {
@@ -576,10 +581,16 @@ struct DashboardView: View {
 
     @ViewBuilder
     private var content: some View {
-        if isLoading && sessions.isEmpty {
+        // Every branch here weighs both lanes. Gating on `sessions` alone meant
+        // the local sessions on the relay machine decided whether the cloud
+        // ones were drawn at all: with none on the relay -- which is the normal
+        // state for someone who works in cloud sessions -- the list was
+        // replaced by "No sessions yet" while sessions sat in it, and adding
+        // another by link changed nothing visible.
+        if isLoading && isEmptyEverywhere {
             ProgressView("Reading sessions…")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if let loadError, sessions.isEmpty {
+        } else if let loadError, isEmptyEverywhere {
             ContentUnavailableView {
                 Label("Can't reach the relay", systemImage: "antenna.radiowaves.left.and.right.slash")
             } description: {
@@ -588,15 +599,21 @@ struct DashboardView: View {
                 Button("Try again") { Task { await load() } }
                 Button("Settings") { viewModel.isShowingSettings = true }
             }
-        } else if sessions.isEmpty {
+        } else if isEmptyEverywhere {
             ContentUnavailableView(
                 "No sessions yet",
                 systemImage: "bubble.left.and.bubble.right",
-                description: Text("Start one below, or run `claude` on the relay machine.")
+                description: Text("Add one from its claude.ai link, start one below, or run `claude` on the relay machine.")
             )
         } else {
             list
         }
+    }
+
+    /// Nothing to show in either lane. A cloud session is a session: one of
+    /// those alone is reason enough to draw the list.
+    private var isEmptyEverywhere: Bool {
+        sessions.isEmpty && cloudSessions.isEmpty
     }
 
     private var list: some View {
