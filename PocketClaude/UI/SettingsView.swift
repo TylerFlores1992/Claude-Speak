@@ -1,5 +1,6 @@
 import AVFoundation
 import SwiftUI
+import UIKit
 
 /// Keys, repository, model, and voice. Everything secret goes to the Keychain
 /// the moment you tap Save and is never held in `@AppStorage`/`UserDefaults`.
@@ -12,11 +13,16 @@ struct SettingsView: View {
     @State private var relayUpdateMessage: String?
     @State private var isUpdatingRelay = false
     @State private var savedNotice: String?
+    @State private var setup: RelayClient.CloudSetup?
+    @State private var setupProblem: String?
+    @State private var isReadingSetup = false
+    @State private var copiedNotice = false
 
     var body: some View {
         NavigationStack {
             Form {
                 relaySection
+                cloudSetupSection
                 voiceSection
                 listeningSection
                 aboutSection
@@ -39,6 +45,82 @@ struct SettingsView: View {
             } message: {
                 Text(savedNotice ?? "")
             }
+        }
+    }
+
+    // MARK: - Cloud setup
+
+    /// The values a cloud environment needs, fetched rather than remembered.
+    ///
+    /// Both live on the relay already: the answer token is its own, and the URL
+    /// is whatever Tailscale Funnel publishes. Asking it beats asking a person
+    /// to recall a hostname, and it cannot be out of date the way a written-down
+    /// value can.
+    ///
+    /// The token is never drawn on screen. It goes to the clipboard and nowhere
+    /// else — a settings screen is the single most screenshotted part of an app
+    /// when something is not working, and this one holds a credential.
+    private var cloudSetupSection: some View {
+        Section {
+            if let setup, let block = setup.block {
+                LabeledContent("Answer URL", value: setup.answerURL ?? "")
+                    .font(.footnote)
+                LabeledContent("Answer token", value: "••••••••")
+                    .font(.footnote)
+
+                Button {
+                    UIPasteboard.general.string = block
+                    copiedNotice = true
+                } label: {
+                    Label(copiedNotice ? "Copied" : "Copy both", systemImage: copiedNotice ? "checkmark" : "doc.on.doc")
+                }
+            } else if let setupProblem {
+                Text(setupProblem)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            } else if let setup, !setup.funnelRunning {
+                Text("The relay is reachable but Tailscale Funnel is not publishing it, so there is no public URL for a cloud session to answer to. Start the funnel and read this again.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
+            Button {
+                Task { await readSetup() }
+            } label: {
+                HStack {
+                    Text(setup == nil ? "Read from the relay" : "Read again")
+                    if isReadingSetup {
+                        Spacer()
+                        ProgressView().controlSize(.small)
+                    }
+                }
+            }
+            .disabled(isReadingSetup)
+        } header: {
+            Text("Cloud session setup")
+        } footer: {
+            Text("Paste these two into the environment at claude.ai/code for each repository you want to talk to. Once per environment, not per session — and the repository needs the Stop hook on its default branch. See relay/hooks/README.md.")
+        }
+    }
+
+    private func readSetup() async {
+        setupProblem = nil
+        copiedNotice = false
+        isReadingSetup = true
+        defer { isReadingSetup = false }
+
+        guard let client = RelayClient.make(settings: settings) else {
+            setupProblem = "Set the relay address and token first."
+            return
+        }
+        do {
+            let found = try await client.cloudSetup()
+            setup = found
+            if found.answerToken == nil {
+                setupProblem = "The relay has no RELAY_ANSWER_TOKEN set, so a cloud session has nothing to authenticate with. Set one on the relay first."
+            }
+        } catch {
+            setupProblem = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
     }
 

@@ -27,7 +27,50 @@ phone ◀── relay speaks it ◀┘
 The relay is a courier. Claude does not run on it for this path, so no checkout
 state, no local model, no "which machine has the session".
 
+## What gets set up, and how often
+
+Two things have to be true before a cloud session can answer your phone, and
+neither of them is per-session:
+
+| | Where it lives | How often |
+|---|---|---|
+| The Stop hook | The repository's default branch | **Once per repository** |
+| `RELAY_ANSWER_URL`, `RELAY_ANSWER_TOKEN` | The environment at claude.ai/code | **Once per environment** |
+
+Once a repository has the hook on its default branch, every session branched
+from it carries the hook. Once an environment has the two variables, every
+session in it has them. Adding a session to the phone after that is pasting its
+link into **+** on the Sessions screen — nothing else.
+
+One exception, and it is the one that catches people: a session that **already
+existed** on a branch cut before the hook landed does not have it, because its
+branch predates the commit. Bring that one file across without merging anything
+else:
+
+```bash
+git fetch origin <default-branch>
+git checkout origin/<default-branch> -- .claude/hooks/answer-to-relay.mjs
+git commit -m "Update the relay hook"
+```
+
+Several repositories can share one environment. Setting the variables once
+covers every repository in it; each repository still needs its own hook commit,
+because the hook travels with the checkout rather than the container.
+
 ## Install
+
+The script does all of this, including the parts that fail quietly:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\relay\install-hook.ps1 -Repo C:\code\your-repo -Commit
+```
+
+It merges into an existing `settings.json` rather than replacing it, writes
+UTF-8 without a BOM, and reads the result back with Node to prove it parses.
+Then set the two environment variables (step 2 below) and you are done.
+
+The rest of this section is what the script does, for anyone doing it by hand
+or on a machine without PowerShell.
 
 **1. Commit the hook to the repository you work in.** Copy
 `answer-to-relay.mjs` to `.claude/hooks/` there, and add to that repository's
@@ -113,6 +156,13 @@ environment dialog:
 |---|---|
 | `RELAY_ANSWER_URL` | `https://<your-funnel-host>/answer` |
 | `RELAY_ANSWER_TOKEN` | the token from step 2 |
+
+**The app has both ready to copy.** Settings -> Cloud session setup reads them
+from the relay: the token is its own, and the URL is whatever the funnel is
+actually publishing, read from `tailscale funnel status` rather than assumed.
+The token is copied to the clipboard and never drawn on screen, because a
+settings screen is the most screenshotted part of an app when something is not
+working.
 
 The URL ends in `/answer`, the path the funnel publishes — not `/cloud/answer`,
 which is the route it forwards to on the relay. Getting this wrong is silent:

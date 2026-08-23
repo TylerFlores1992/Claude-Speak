@@ -163,6 +163,7 @@ Everything except `/health` requires `Authorization: Bearer $RELAY_TOKEN`.
 | `POST` | `/cloud/send` | Queues a message into a cloud session. Returns without an answer. |
 | `POST` | `/cloud/ask` | Queues a message into a cloud session and waits one hop for the answer, which arrives via the Stop hook. See `hooks/README.md`. |
 | `POST` | `/cloud/await` | Waits for an answer without sending anything. How the phone keeps waiting past one hop. |
+| `GET` | `/setup` | The answer URL and token a cloud environment needs, ready to paste. |
 | `POST` | `/cloud/add` | Adds a session to the remembered list from its link, and marks its answers as wanted. |
 | `POST` | `/cloud/forget` | Drops one from the list. The session itself keeps running on claude.ai. |
 | `POST` | `/cloud/rename` | Names one in this list. The session on claude.ai is untouched. |
@@ -193,6 +194,17 @@ naming a session creates a session, and the titler pollutes the list it exists
 to tidy.
 
 ### Cloud sessions
+
+Setting one up is two things, neither of them per-session: the Stop hook on the
+repository's default branch, and `RELAY_ANSWER_URL` / `RELAY_ANSWER_TOKEN` on
+the environment. After that, adding a session to the phone is pasting its link.
+See [`hooks/README.md`](hooks/README.md).
+
+**This repository has the hook installed on itself**, in `.claude/`, so a cloud
+session working on the relay can answer the phone like any other. It shipped the
+hook without ever installing it here, which is why the first cloud session
+opened on this repo took messages and never answered one.
+
 
 Sessions in the Claude app's Code tab run on Anthropic's infrastructure. Nothing
 here can see them and no API lists them, so they arrive one at a time by link,
@@ -232,6 +244,22 @@ Hops are clamped to ninety seconds so a stuck client cannot pin a socket open.
 An answer nobody ever collects is discarded when the next question arrives:
 the inbox is drained at the start of every wait, so leaving it there would hand
 the previous turn's answer to a question it has never seen.
+
+### Knowing why a session is silent
+
+A missing hook used to fail exactly like a slow turn: silence until a timeout,
+with nothing to act on. The relay can tell them apart, because **the hook probes
+before it sends anything** -- so a session that has never probed has never run
+the hook.
+
+`/cloud/ask` and `/cloud/await` report that as `hookMissing`, and the phone
+stops waiting rather than spending another fourteen minutes on something that
+cannot arrive. Probes are recorded in `RELAY_STATE_DIR/probes.json` rather than
+memory, because a restart would otherwise forget every session it had heard from
+and start accusing working setups of having no hook.
+
+It cannot distinguish a missing hook from a token that does not match -- a
+rejected probe never reaches the code that records one -- so it names both.
 
 ### What a transcript is, and is not
 

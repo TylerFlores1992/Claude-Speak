@@ -712,6 +712,112 @@ function clearHistoryWant(id) {
 }
 
 /**
+ * The public URL the hook should post to, read out of Tailscale Funnel.
+ *
+ * The two values a cloud environment needs are both knowable here -- the token
+ * is this relay's own, and the URL is whatever the funnel publishes -- so the
+ * phone can hand them over ready to paste instead of asking someone to
+ * reconstruct a hostname from memory.
+ *
+ * Parsed rather than assumed: the funnel is mounted on a path, and which path
+ * is a choice the person setting it up made. Guessing "/answer" would be right
+ * for the documented setup and wrong for anyone who chose otherwise, and wrong
+ * silently -- the hook would post into a 404 and the session would look like it
+ * had no hook at all.
+ */
+function parseFunnelURL(output, port) {
+  const text = String(output ?? "");
+  // The base appears on its own line; take the first https://...ts.net.
+  const base = text.match(/https:\/\/[A-Za-z0-9._-]+\.ts\.net/)?.[0];
+  if (!base) return null;
+
+  // Then the mount that forwards to this relay's answer route. Tailscale
+  // prints these as "/path proxy http://127.0.0.1:PORT/cloud/answer".
+  const mount = new RegExp(
+    `(/[^\\s]*)\\s+proxy\\s+https?://[^\\s]*:${port}/cloud/answer`
+  ).exec(text);
+  if (!mount) return null;
+
+  const path = mount[1] === "/" ? "" : mount[1];
+  return `${base}${path}`;
+}
+
+function funnelURL() {
+  try {
+    const output = execFileSync("tailscale", ["funnel", "status"], {
+      encoding: "utf8",
+      timeout: 5_000,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return parseFunnelURL(output, PORT);
+  } catch {
+    // Tailscale missing, not running, or no funnel up. All the same answer.
+    return null;
+  }
+}
+
+// Sessions whose hook has reported in.
+//
+// The hook probes before it sends anything, so a session that has never probed
+// has never run the hook. That is the difference between "the turn is still
+// going" and "nothing is installed to answer you", and without it a missing
+// hook fails the same way a slow turn does: silence until a timeout.
+//
+// Persisted, because it is used to make a claim. In memory alone, a relay
+// restart would forget every session it had ever heard from and start telling
+// people their hook was missing when it was not.
+function probesPath() {
+  return join(stateDir(), "probes.json");
+}
+
+function loadProbes() {
+  try {
+    const parsed = JSON.parse(readFileSync(probesPath(), "utf8"));
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Records that this session's hook exists and can reach us. */
+function rememberProbe(id) {
+  const key = normalizeCloudId(id);
+  if (!key) return;
+  const probes = loadProbes();
+  probes[key] = new Date().toISOString();
+  try {
+    mkdirSync(dirname(probesPath()), { recursive: true });
+    writeFileSync(probesPath(), JSON.stringify(probes, null, 2));
+  } catch {
+    // Losing this costs a worse error message, never an answer.
+  }
+}
+
+function hasProbed(id) {
+  const key = normalizeCloudId(id);
+  return key ? Boolean(loadProbes()[key]) : false;
+}
+
+/**
+ * Why a session did not answer, when it did not.
+ *
+ * A session that has never probed has never run the hook -- or has run it with
+ * a token this relay rejects, which never reaches the code that records a
+ * probe. Both are setup, and saying so beats another timeout with no reason
+ * attached. A session that *has* probed before is simply still working.
+ */
+function silenceReason(id) {
+  if (hasProbed(id)) {
+    return "The message was delivered but no answer came back in time. The turn is probably still running -- ask again and the answer will be waiting.";
+  }
+  return (
+    "The message was delivered, but this session has never reported back to the relay. " +
+    "Either its repository has no Stop hook on the branch it is running, or RELAY_ANSWER_TOKEN " +
+    "does not match this relay's. See relay/hooks/README.md."
+  );
+}
+
+/**
  * Throws away an answer nobody collected.
  *
  * The inbox exists so an answer that arrives with no listener is not lost. But
@@ -1371,6 +1477,10 @@ const server = createServer((req, res) => {
         const text = typeof body.text === "string" ? body.text : "";
         if (!id) return respond(res, 400, { error: "sessionId is required" });
 
+        // The hook reached us with a real session id, which is the whole
+        // proof that it is installed and its token is right.
+        rememberProbe(id);
+
         // Whether this relay wants to hear from this session at all.
         const wanted = ANSWER_ALL || wasAsked(id);
 
@@ -1473,6 +1583,25 @@ const server = createServer((req, res) => {
   // So the phone sends once and then waits in short hops. Each hop is a
   // request that lives well inside any timeout, and the inbox means an answer
   // that lands between two hops is still there when the next one asks.
+  // The two values a cloud environment needs, ready to paste.
+  //
+  // Behind the main auth gate, so this needs the relay token -- which the
+  // phone already holds, and which is strictly more powerful than the answer
+  // token it hands back. Nothing is exposed here that the caller could not
+  // already do.
+  if (req.method === "GET" && req.url === "/setup") {
+    const url = funnelURL();
+    respond(res, 200, {
+      answerUrl: url,
+      answerToken: ANSWER_TOKEN || null,
+      // Said separately so the phone can explain which half is missing
+      // instead of showing a block with a hole in it.
+      funnelRunning: Boolean(url),
+      hookPath: ".claude/hooks/answer-to-relay.mjs",
+    });
+    return;
+  }
+
   if (req.method === "POST" && req.url === "/cloud/await") {
     readJSON(req)
       .then(async (body) => {
@@ -1487,8 +1616,16 @@ const server = createServer((req, res) => {
         markAsked(sessionId);
         const answer = await awaitAnswer(sessionId, waitMs);
         // `waiting: true` is not a failure -- it means ask again. Only the
-        // phone knows how long it is prepared to keep waiting.
-        if (answer === null) return respond(res, 200, { sessionId, answer: null, waiting: true });
+        // phone knows how long it is prepared to keep waiting. `hookMissing`
+        // is the one case where waiting longer cannot help.
+        if (answer === null) {
+          return respond(res, 200, {
+            sessionId,
+            answer: null,
+            waiting: true,
+            hookMissing: !hasProbed(sessionId),
+          });
+        }
         respond(res, 200, { sessionId, answer });
       })
       .catch((error) => respond(res, 400, { error: error.message }));
@@ -1538,8 +1675,9 @@ const server = createServer((req, res) => {
           return respond(res, 200, {
             sessionId,
             answer: null,
-            error:
-              "The message was delivered but no answer came back in time. Either the turn is still running, or the Stop hook is not installed in that repository.",
+            waiting: true,
+            hookMissing: !hasProbed(sessionId),
+            error: silenceReason(sessionId),
           });
         }
         respond(res, 200, { sessionId, answer });
@@ -1881,6 +2019,10 @@ export {
   normalizeCloudId,
   deliverAnswer,
   discardBufferedAnswer,
+  rememberProbe,
+  hasProbed,
+  silenceReason,
+  parseFunnelURL,
   awaitAnswer,
   markAsked,
   wasAsked,

@@ -169,6 +169,32 @@ extension RelayClient {
         )
     }
 
+    /// The two values a cloud environment needs, read from the relay.
+    ///
+    /// Both are knowable there — the token is the relay's own, and the URL is
+    /// whatever the funnel publishes — so nobody has to reconstruct a hostname
+    /// from memory or find which token was which.
+    struct CloudSetup {
+        var answerURL: String?
+        var answerToken: String?
+        var funnelRunning: Bool
+
+        /// What goes into the environment, ready to paste.
+        var block: String? {
+            guard let answerURL, let answerToken else { return nil }
+            return "RELAY_ANSWER_URL=\(answerURL)\nRELAY_ANSWER_TOKEN=\(answerToken)"
+        }
+    }
+
+    func cloudSetup() async throws -> CloudSetup {
+        let json = try await getJSON(path: "setup")
+        return CloudSetup(
+            answerURL: json["answerUrl"]?.stringValue,
+            answerToken: json["answerToken"]?.stringValue,
+            funnelRunning: json["funnelRunning"]?.boolValue ?? false
+        )
+    }
+
     /// Renames a session on the relay machine.
     ///
     /// An empty name puts the default back, whatever that was — a title set
@@ -315,7 +341,11 @@ extension RelayClient {
         )
         // The `error` field on a 200 here only ever says "no answer yet", which
         // is the normal case for a turn longer than one hop. A real refusal is
-        // a non-2xx and `post` has already thrown by now.
+        // a non-2xx and `post` has already thrown by now. The exception is a
+        // session the relay has never heard from, which is not slowness.
+        if sent["hookMissing"]?.boolValue == true {
+            throw RelayError.relay(Self.missingHookAdvice)
+        }
         if let answer = sent["answer"]?.stringValue, !answer.isEmpty {
             return answer
         }
@@ -341,11 +371,27 @@ extension RelayClient {
             if let problem = json["error"]?.stringValue, !problem.isEmpty {
                 throw RelayError.relay(problem)
             }
+            // The relay knows this session has never reported in, which means
+            // nothing is installed to answer. Waiting the other fourteen
+            // minutes cannot change that.
+            if json["hookMissing"]?.boolValue == true {
+                throw RelayError.relay(Self.missingHookAdvice)
+            }
         }
         throw RelayError.relay(
-            "No answer came back. Either the turn is still running on claude.ai — the answer will be waiting next time you ask — or the Stop hook is not installed on that session's branch."
+            "No answer came back. The turn may still be running on claude.ai — ask again and the answer will be waiting."
         )
     }
+
+    /// Said the same way from both places it can be discovered.
+    ///
+    /// Naming the two causes rather than one: the hook missing and its token
+    /// not matching are indistinguishable from here — neither reaches the code
+    /// that records a session as having reported in — and guessing between them
+    /// would send someone to check the wrong thing.
+    static let missingHookAdvice = """
+        This session has never reported back to the relay, so nothing is installed to answer you.         Either its repository has no Stop hook on the branch it is running, or its RELAY_ANSWER_TOKEN         doesn't match the relay's. Settings has both values ready to copy.
+        """
 
     /// Collects an answer that arrived while nothing was listening.
     func awaitCloudAnswer(sessionID: String, timeout: TimeInterval = 60) async throws -> String? {
