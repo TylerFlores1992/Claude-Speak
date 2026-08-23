@@ -194,6 +194,17 @@ to tidy.
 
 ### Cloud sessions
 
+Setting one up is two things, neither of them per-session: the Stop hook on the
+repository's default branch, and `RELAY_ANSWER_URL` / `RELAY_ANSWER_TOKEN` on
+the environment. After that, adding a session to the phone is pasting its link.
+See [`hooks/README.md`](hooks/README.md).
+
+**This repository has the hook installed on itself**, in `.claude/`, so a cloud
+session working on the relay can answer the phone like any other. It shipped the
+hook without ever installing it here, which is why the first cloud session
+opened on this repo took messages and never answered one.
+
+
 Sessions in the Claude app's Code tab run on Anthropic's infrastructure. Nothing
 here can see them and no API lists them, so they arrive one at a time by link,
 through `/cloud/add`.

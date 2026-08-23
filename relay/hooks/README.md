@@ -27,6 +27,36 @@ phone ◀── relay speaks it ◀┘
 The relay is a courier. Claude does not run on it for this path, so no checkout
 state, no local model, no "which machine has the session".
 
+## What gets set up, and how often
+
+Two things have to be true before a cloud session can answer your phone, and
+neither of them is per-session:
+
+| | Where it lives | How often |
+|---|---|---|
+| The Stop hook | The repository's default branch | **Once per repository** |
+| `RELAY_ANSWER_URL`, `RELAY_ANSWER_TOKEN` | The environment at claude.ai/code | **Once per environment** |
+
+Once a repository has the hook on its default branch, every session branched
+from it carries the hook. Once an environment has the two variables, every
+session in it has them. Adding a session to the phone after that is pasting its
+link into **+** on the Sessions screen — nothing else.
+
+One exception, and it is the one that catches people: a session that **already
+existed** on a branch cut before the hook landed does not have it, because its
+branch predates the commit. Bring that one file across without merging anything
+else:
+
+```bash
+git fetch origin <default-branch>
+git checkout origin/<default-branch> -- .claude/hooks/answer-to-relay.mjs
+git commit -m "Update the relay hook"
+```
+
+Several repositories can share one environment. Setting the variables once
+covers every repository in it; each repository still needs its own hook commit,
+because the hook travels with the checkout rather than the container.
+
 ## Install
 
 **1. Commit the hook to the repository you work in.** Copy
