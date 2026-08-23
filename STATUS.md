@@ -32,15 +32,26 @@ built history pulling. Read this first when picking the project back up.
 Be honest about these rather than describing them as working:
 
 - **`/cloud/send`** — queueing a message into a cloud session.
-- **Remote Control** (`Watch live`) — gated on a research-preview flag.
-  **`claude remote-control` on the mini PC is the one command that decides
-  whether this whole path is open.** It has not been run.
 - **The green live dot** — needs `claude agents --json` on the relay machine.
 - **Wake word while locked** — the premise (an app keeps a microphone it already
   holds) is documented behaviour of the `audio` background mode, not observed.
 - **Keep music playing** — ducking adds a route negotiation at microphone
   acquisition, which is what caused early locked-screen crashes. If takes start
   failing with music on, that is the suspect.
+
+## Removed from the app
+
+Cut once teleport was proven dead, because each was reachable only through the
+sheet teleport lived in, or existed only to serve it: the "Bring it here"
+teleport flow, the Remote Control toggle, cloud-session refresh (which
+re-teleported), and starting a cloud session from the phone (which the CLI
+refuses without a terminal). The relay still serves those endpoints; nothing
+calls them.
+
+Also cut from the UI: the composer's `claude.ai` chip (its only other job,
+leaving the session, now happens automatically), the conversation's
+new-session toolbar icon (still in the actions menu), and the dashboard's
+back-to-current-conversation shortcut.
 
 ## Known dead ends, with the reason
 
@@ -115,13 +126,14 @@ that VM can reach the relay — are both answered yes.
 
 ## Open threads
 
-1. **Remove what is now known to be dead.** `/teleport` and the app's "Bring it
-   here" cannot work — see the dead ends above. The button is still on screen.
-2. **Simplify around cloud sessions.** The dashboard still carries local
-   sessions, teleport, and Remote Control alongside the lane that actually
-   works. Stated preference: less is more.
-3. **Run `claude remote-control` on the mini PC.** Decides the local half of
-   session merging — worth knowing before deciding whether to cut it.
+1. **Sweep for swallowed errors.** Three bugs in one evening were the same
+   shape: `try?` then `?? []`, an error discarded, and an empty state shown
+   that read as "nothing here" instead of "something failed". More instances
+   remain.
+2. **Decide about the direct-API lane.** Settings still offers answering from
+   the Anthropic API instead of the relay, which carries the credentials and
+   repository sections, `AgentRunner`, and `ToolExecutor`. Unused in practice.
+   Cutting it would be the single biggest simplification left.
 4. **Scaffold repo config for campsite-finder** — a `.claude/settings.json`
    SessionStart hook plus `scripts/setup.sh`, so setup travels with the repo
    into both cloud sessions and relay sessions. Offered, not yet started.
