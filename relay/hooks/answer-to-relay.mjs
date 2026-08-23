@@ -12,7 +12,7 @@
 // to the repository you work in, then setting two environment variables on the
 // cloud environment at claude.ai/code:
 //
-//     RELAY_ANSWER_URL    https://your-funnel-host/cloud/answer
+//     RELAY_ANSWER_URL    https://your-funnel-host/answer
 //     RELAY_ANSWER_TOKEN  the value of RELAY_ANSWER_TOKEN on the relay
 //
 // Silence is the design. A hook that fails loudly interrupts a working session
