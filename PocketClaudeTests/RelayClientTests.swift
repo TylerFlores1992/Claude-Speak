@@ -123,6 +123,61 @@ final class RelayClientTests: XCTestCase {
         XCTAssertEqual(json["sessionId"], JSONValue.null)
     }
 
+    // MARK: - Query strings
+
+    // Regression: `getJSON` folded the whole path-and-query string into
+    // `URLComponents.path`, which percent-encodes what it is given. The "?"
+    // became "%3F", the relay saw one long path with no parameters, and
+    // answered 400 -- which the app reported as "the relay didn't answer",
+    // pointing the diagnosis at the network instead of at this line.
+
+    func testTranscriptSendsTheSessionIdAsARealQuery() async throws {
+        MockURLProtocol.handler = { _ in
+            (200, .json(#"{"sessionId":"session_abc","messages":[]}"#))
+        }
+
+        _ = try await makeClient().cloudTranscript(id: "session_abc")
+
+        let url = try XCTUnwrap(MockURLProtocol.recorded.first?.url)
+        XCTAssertEqual(url.path, "/cloud/transcript")
+        XCTAssertEqual(url.query, "sessionId=session_abc")
+        XCTAssertFalse(
+            url.absoluteString.contains("%3F"),
+            "the question mark was encoded into the path: \(url.absoluteString)"
+        )
+    }
+
+    func testTranscriptKeepsAPathPrefixAndTheQueryTogether() async throws {
+        MockURLProtocol.handler = { _ in
+            (200, .json(#"{"sessionId":"session_abc","messages":[]}"#))
+        }
+
+        let client = RelayClient(
+            baseURL: URL(string: "https://host/pocketclaude")!,
+            token: "t",
+            session: MockURLProtocol.makeSession()
+        )
+        _ = try await client.cloudTranscript(id: "session_abc")
+
+        let url = try XCTUnwrap(MockURLProtocol.recorded.first?.url)
+        XCTAssertEqual(url.absoluteString, "https://host/pocketclaude/cloud/transcript?sessionId=session_abc")
+    }
+
+    func testTranscriptReportsWhetherHistoryWasPulled() async throws {
+        MockURLProtocol.handler = { _ in
+            (200, .json(#"""
+            {"sessionId":"session_abc",
+             "messages":[{"role":"user","text":"hi"},{"role":"assistant","text":"hello"}],
+             "pulled":true,"pullPending":false}
+            """#))
+        }
+
+        let history = try await makeClient().cloudTranscript(id: "session_abc")
+        XCTAssertEqual(history.messages.count, 2)
+        XCTAssertTrue(history.pulled)
+        XCTAssertFalse(history.pullPending)
+    }
+
     // MARK: - Streaming
 
     func testStreamsChunksInOrderAndReturnsTheFinalAnswer() async throws {

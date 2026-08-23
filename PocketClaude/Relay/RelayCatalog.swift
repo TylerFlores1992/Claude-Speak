@@ -465,9 +465,28 @@ extension RelayClient {
         guard var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
             throw RelayError.invalidURL(baseURL.absoluteString)
         }
+
+        // A query string has to be set as the query, never folded into the
+        // path. `URLComponents` percent-encodes whatever the path setter is
+        // given, so a "?" handed to it becomes "%3F" and the relay sees one
+        // long path with no parameters at all — a 400 that reads like the
+        // relay is down rather than like a malformed URL.
+        let route: String
+        let query: String?
+        if let split = path.firstIndex(of: "?") {
+            route = String(path[path.startIndex..<split])
+            query = String(path[path.index(after: split)...])
+        } else {
+            route = path
+            query = nil
+        }
+
         components.path = components.path.hasSuffix("/")
-            ? components.path + path
-            : components.path + "/" + path
+            ? components.path + route
+            : components.path + "/" + route
+        if let query, !query.isEmpty {
+            components.percentEncodedQuery = query
+        }
         guard let url = components.url else {
             throw RelayError.invalidURL(baseURL.absoluteString)
         }
