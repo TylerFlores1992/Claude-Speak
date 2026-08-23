@@ -21,6 +21,7 @@ import {
   resolveProject,
   cleanTitle,
   deliverAnswer,
+  discardBufferedAnswer,
   awaitAnswer,
   markAsked,
   wasAsked,
@@ -746,6 +747,30 @@ test("the same thing said twice in a row is recorded once", () => {
   appendTranscript("session_01DUP", "user", "and the other one?");
   appendTranscript("session_01DUP", "assistant", "Done.");
   assert.equal(loadTranscript("session_01DUP").length, 3);
+});
+
+test("a new question does not get the last one's uncollected answer", () => {
+  // The inbox holds an answer nobody was waiting for. That is right until the
+  // next question arrives: draining it then returns the previous turn's answer
+  // instantly, apparently answering something it has never seen.
+  deliverAnswer("session_01STALE", "the old answer");
+  assert.equal(discardBufferedAnswer("session_01STALE"), true);
+
+  // Nothing buffered now, so a waiter waits rather than resolving at once.
+  let settled = false;
+  awaitAnswer("session_01STALE", 50).then(() => { settled = true; });
+  assert.equal(settled, false);
+});
+
+test("discarding nothing is not an error", () => {
+  assert.equal(discardBufferedAnswer("session_01NONE"), false);
+  assert.equal(discardBufferedAnswer(""), false);
+  assert.equal(discardBufferedAnswer("../etc/passwd"), false);
+});
+
+test("a discarded answer is found under either id spelling", () => {
+  deliverAnswer("session_01SPELLED", "buffered");
+  assert.equal(discardBufferedAnswer("cse_01SPELLED"), true);
 });
 
 // --- Renaming ---------------------------------------------------------------
