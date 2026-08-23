@@ -15,7 +15,6 @@ struct ConversationScreen: View {
     /// scrolling stack does not dismiss it, so without this the keyboard covers
     /// the transcript with no way back.
     @FocusState private var isComposerFocused: Bool
-    @State private var isShowingSessions = false
 
     var body: some View {
         Group {
@@ -34,9 +33,6 @@ struct ConversationScreen: View {
             // No toolbar of its own. Starting a fresh conversation lives on
             // the sessions screen, next to the list of what already exists,
             // rather than as an unlabelled icon a thumb finds by accident.
-            .sheet(isPresented: $isShowingSessions) {
-                SessionListView(viewModel: viewModel)
-            }
             .alert(
                 "Something went wrong",
                 isPresented: Binding(
@@ -137,7 +133,7 @@ struct ConversationScreen: View {
                 .onSubmit(sendTyped)
 
             HStack(spacing: 8) {
-                actionsMenu
+                repeatButton
 
                 if isComposerFocused {
                     Button { isComposerFocused = false } label: {
@@ -270,27 +266,24 @@ struct ConversationScreen: View {
         isComposerFocused = false
     }
 
-    /// The things you reach for occasionally. In a menu rather than the toolbar
-    /// because the toolbar was carrying five icons, none of them labelled.
-    private var actionsMenu: some View {
-        Menu {
-            Button { isShowingSessions = true } label: {
-                Label("Past conversations", systemImage: "clock.arrow.circlepath")
-            }
-            Button { viewModel.repeatLastAnswer() } label: {
-                Label("Repeat last answer", systemImage: "arrow.counterclockwise")
-            }
-            Divider()
-            Button { viewModel.newSession() } label: {
-                Label("New session", systemImage: "square.and.pencil")
-            }
+    /// Say the last answer again.
+    ///
+    /// It replaced a menu holding three things, two of which the sessions
+    /// screen already does better: past conversations are that whole screen,
+    /// and starting a new one is the button on it. What was left was the one
+    /// action with nowhere else to live and a real reason to be one tap deep —
+    /// a plane goes over, you miss the answer, and hunting through a menu for
+    /// it means you have missed it twice.
+    private var repeatButton: some View {
+        Button {
+            viewModel.repeatLastAnswer()
         } label: {
-            Image(systemName: "plus")
-                .font(.system(size: 17, weight: .medium))
+            Image(systemName: "arrow.counterclockwise")
+                .font(.system(size: 16, weight: .medium))
                 .frame(width: 34, height: 34)
                 .background(Color.pcIconWell, in: Circle())
                 .foregroundStyle(.primary)
         }
-        .accessibilityLabel("More actions")
+        .accessibilityLabel("Say the last answer again")
     }
 }

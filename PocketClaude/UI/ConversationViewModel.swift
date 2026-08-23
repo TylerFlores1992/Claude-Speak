@@ -897,48 +897,7 @@ final class ConversationViewModel: ObservableObject {
         errorMessage = nil
     }
 
-    // MARK: - Session history
-
-    /// Everything saved, newest first. Reads the session directory, so call it
-    /// when the list is shown rather than keeping it live.
-    func sessionSummaries() -> [SessionSummary] {
-        // Include the open conversation, which may not be on disk yet.
-        var summaries = store.summaries().filter { $0.id != session.id }
-        if !session.isEmpty {
-            summaries.insert(SessionSummary(session), at: 0)
-        }
-        return summaries.sorted(by: SessionSummary.newestFirst)
-    }
-
-    /// Opens a previous conversation, saving the current one first.
-    func switchToSession(id: UUID) {
-        guard id != session.id else { return }
-        speech.stop()
-        cancelListening()
-        streamingEntryID = nil
-        streamedSoFar = ""
-
-        store.save(session)
-        guard let restored = store.load(id: id) else {
-            errorMessage = "That conversation could not be opened."
-            return
-        }
-        session = restored
-        state = .idle
-        errorMessage = nil
-    }
-
-    func deleteSession(id: UUID) {
-        store.delete(id: id)
-        // Deleting the conversation you're in leaves you on a blank one.
-        if id == session.id {
-            speech.stop()
-            streamingEntryID = nil
-            streamedSoFar = ""
-            session = Session(model: settings.model.rawValue)
-            state = .idle
-        }
-    }
+    // MARK: - Speaking again
 
     func repeatLastAnswer() {
         guard let last = session.transcript.last(where: { $0.kind == .assistant }) else { return }
