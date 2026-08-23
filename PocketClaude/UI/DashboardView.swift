@@ -47,6 +47,11 @@ struct DashboardView: View {
     /// asks.
     @State private var sessionPendingDeletion: RelaySession?
     @State private var rowActionProblem: String?
+    @State private var isAddingSession = false
+    @State private var newSessionLink = ""
+    @State private var newSessionTitle = ""
+    @State private var addProblem: String?
+    @State private var isAdding = false
 
     private var grouped: [(project: String, sessions: [RelaySession])] {
         let matching = sessions.filter { session in
@@ -69,8 +74,14 @@ struct DashboardView: View {
         .navigationTitle("Sessions")
         .navigationBarTitleDisplayMode(.inline)
         .searchable(text: $query, prompt: "Search sessions")
-        .task { await load() }
-        .refreshable { await load() }
+        .task {
+            await load()
+            await loadCloudSessions()
+        }
+        .refreshable {
+            await load()
+            await loadCloudSessions()
+        }
         .confirmationDialog("New session in…", isPresented: $isChoosingProject, titleVisibility: .visible) {
             ForEach(projects.filter(\.available)) { project in
                 Button(project.isScratch ? "\(project.name) — no repository" : project.name) {
@@ -98,13 +109,94 @@ struct DashboardView: View {
                         ?? RelayClient.RemoteControlState(running: false)
                 }
         }
+        .sheet(isPresented: $isAddingSession) { addSessionSheet }
         .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
+            ToolbarItemGroup(placement: .topBarLeading) {
+                Button { isAddingSession = true } label: {
+                    Image(systemName: "plus.circle")
+                }
+                .accessibilityLabel("Add a session from claude.ai")
+
                 Button { isBringingCloudSession = true } label: {
                     Image(systemName: "cloud.fill")
                 }
-                .accessibilityLabel("Bring a cloud session here")
+                .accessibilityLabel("Cloud session options")
             }
+        }
+    }
+
+    /// Paste a link, get a row. The whole of adding a session.
+    ///
+    /// Separate from the older cloud sheet on purpose: that one carries
+    /// teleporting, queueing, Remote Control and refreshing, which are
+    /// occasional and easy to confuse with each other. This is the one thing
+    /// done often, so it is one field and one button.
+    private var addSessionSheet: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("claude.ai/code/session_…", text: $newSessionLink, axis: .vertical)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                        .lineLimit(1...3)
+
+                    TextField("Name it (optional)", text: $newSessionTitle)
+                } footer: {
+                    Text("Open the session in the Claude app, copy its link, and paste it here. It joins the list above and you can ask it questions by voice.")
+                }
+
+                if let addProblem {
+                    Section {
+                        Label(addProblem, systemImage: "exclamationmark.triangle.fill")
+                            .font(.footnote)
+                            .foregroundStyle(.orange)
+                    }
+                }
+
+                Section {
+                    Button {
+                        Task { await addSession() }
+                    } label: {
+                        HStack {
+                            Text("Add it")
+                            Spacer()
+                            if isAdding { ProgressView().controlSize(.small) }
+                        }
+                    }
+                    .disabled(
+                        isAdding
+                            || newSessionLink.trimmingCharacters(in: .whitespaces).isEmpty
+                    )
+                }
+            }
+            .navigationTitle("Add a session")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { isAddingSession = false }
+                }
+            }
+        }
+    }
+
+    private func addSession() async {
+        addProblem = nil
+        isAdding = true
+        defer { isAdding = false }
+        do {
+            let session = try await viewModel.addCloudSession(
+                link: newSessionLink.trimmingCharacters(in: .whitespacesAndNewlines),
+                title: newSessionTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+            )
+            newSessionLink = ""
+            newSessionTitle = ""
+            await loadCloudSessions()
+            isAddingSession = false
+            // Straight in, because adding a session is asking to use it.
+            viewModel.useCloudSession(session)
+        } catch {
+            addProblem = (error as? LocalizedError)?.errorDescription
+                ?? error.localizedDescription
         }
     }
 
@@ -509,6 +601,37 @@ struct DashboardView: View {
 
     private var list: some View {
         List {
+            if !cloudSessions.isEmpty {
+                Section {
+                    ForEach(cloudSessions) { session in
+                        Button {
+                            viewModel.useCloudSession(session)
+                        } label: {
+                            cloudRow(session)
+                        }
+                        .buttonStyle(.plain)
+                        .listRowBackground(Color.pcCard)
+                        .swipeActions(edge: .trailing) {
+                            // Removes it from this list only. The session keeps
+                            // running on claude.ai and can be added again from
+                            // its link, so there is nothing to confirm.
+                            Button(role: .destructive) {
+                                Task { await forget(session) }
+                            } label: {
+                                Label("Remove", systemImage: "minus.circle")
+                            }
+                        }
+                    }
+                } header: {
+                    Label("On claude.ai", systemImage: "cloud.fill")
+                        .font(.footnote.weight(.semibold))
+                        .textCase(nil)
+                } footer: {
+                    Text("These run on Anthropic's infrastructure. Ask by voice here; the same conversation is in the Claude app.")
+                        .font(.caption)
+                }
+            }
+
             ForEach(grouped, id: \.project) { group in
                 Section {
                     ForEach(group.sessions) { session in
@@ -604,6 +727,46 @@ struct DashboardView: View {
             rowActionProblem = (error as? LocalizedError)?.errorDescription
                 ?? error.localizedDescription
             await load()
+        }
+    }
+
+    private func cloudRow(_ session: CloudSession) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: "cloud.fill")
+                .font(.footnote)
+                .foregroundStyle(Color.accentColor)
+                .frame(width: 34, height: 34)
+                .background(Color.accentColor.opacity(0.15), in: RoundedRectangle(cornerRadius: 9))
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(session.displayTitle)
+                    .font(.body)
+                    .lineLimit(1)
+                Text(session.project ?? "claude.ai")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 8)
+
+            if let updated = session.updatedAt {
+                Text(updated, format: .relative(presentation: .numeric))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func forget(_ session: CloudSession) async {
+        cloudSessions.removeAll { $0.cloudID == session.cloudID }
+        do {
+            try await viewModel.forgetCloudSession(id: session.cloudID)
+        } catch {
+            rowActionProblem = (error as? LocalizedError)?.errorDescription
+                ?? error.localizedDescription
+            await loadCloudSessions()
         }
     }
 

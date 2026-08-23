@@ -853,11 +853,13 @@ function stopRemoteControl() {
 // the previous copies are recorded and filtered out of the session list. Left
 // alone they would pile up: one extra row per refresh, all with the same title.
 
-const CLOUD_PATH = join(homedir(), ".pocketclaude", "cloud.json");
+function cloudPath() {
+  return join(stateDir(), "cloud.json");
+}
 
 function loadCloud() {
   try {
-    const parsed = JSON.parse(readFileSync(CLOUD_PATH, "utf8"));
+    const parsed = JSON.parse(readFileSync(cloudPath(), "utf8"));
     return parsed && typeof parsed === "object" ? parsed : {};
   } catch {
     return {};
@@ -866,10 +868,60 @@ function loadCloud() {
 
 function saveCloud(state) {
   try {
-    mkdirSync(dirname(CLOUD_PATH), { recursive: true });
-    writeFileSync(CLOUD_PATH, JSON.stringify(state, null, 2));
+    mkdirSync(dirname(cloudPath()), { recursive: true });
+    writeFileSync(cloudPath(), JSON.stringify(state, null, 2));
   } catch {
     // Losing this costs a re-paste, not correctness.
+  }
+}
+
+// Cloud session transcripts.
+//
+// There is no API that returns a cloud session's messages, and --teleport --
+// the only thing that can fetch its history -- checks out its branch and makes
+// a diverging copy, which is far too much for "show me what we said".
+//
+// So the relay keeps its own record instead: every question it sends and every
+// answer the hook returns. Exact for everything from the moment a session joins
+// the list, and silent about anything said before that. Honest and cheap beats
+// complete and invasive.
+
+function transcriptDir() {
+  return join(stateDir(), "transcripts");
+}
+// Enough to scroll back through a working session, few enough that a file
+// stays small and a phone can render it.
+const TRANSCRIPT_LIMIT = 200;
+
+function transcriptPath(id) {
+  const key = normalizeCloudId(id);
+  // The id is validated before it ever reaches here, but this builds a path
+  // from it, so it is checked again rather than trusted twice removed.
+  if (!key || /[\\/]|\.\./.test(key)) return null;
+  return join(transcriptDir(), `${key}.json`);
+}
+
+function loadTranscript(id) {
+  const path = transcriptPath(id);
+  if (!path) return [];
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8"));
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function appendTranscript(id, role, text) {
+  const path = transcriptPath(id);
+  if (!path || typeof text !== "string" || !text.trim()) return;
+  const entries = loadTranscript(id);
+  entries.push({ role, text, at: new Date().toISOString() });
+  try {
+    mkdirSync(transcriptDir(), { recursive: true });
+    writeFileSync(path, JSON.stringify(entries.slice(-TRANSCRIPT_LIMIT), null, 2));
+  } catch {
+    // A lost transcript costs history, never an answer.
   }
 }
 
@@ -1036,7 +1088,22 @@ function teleportArgs(sessionId) {
 // cache is keyed by session id, so a session that grows never gets renamed and
 // never costs a second call.
 
-const TITLES_PATH = join(homedir(), ".pocketclaude", "titles.json");
+/**
+ * Where the relay keeps what it remembers: titles, cloud sessions, archived
+ * ids, transcripts.
+ *
+ * Read on each call rather than captured at import, so a test can redirect it
+ * without the module having already decided. The tests used to write into a
+ * real home directory and accumulate across runs, which made them pass or fail
+ * depending on what had been run before.
+ */
+function stateDir() {
+  return process.env.RELAY_STATE_DIR ?? join(homedir(), ".pocketclaude");
+}
+
+function titlesPath() {
+  return join(stateDir(), "titles.json");
+}
 
 // Live sessions.
 //
@@ -1099,11 +1166,13 @@ function liveSessionIds() {
 // keyboard; the session has only left the phone's list. Deleting, by contrast,
 // removes the transcript file itself and is not undoable.
 
-const ARCHIVE_PATH = join(homedir(), ".pocketclaude", "archived.json");
+function archivePath() {
+  return join(stateDir(), "archived.json");
+}
 
 function loadArchived() {
   try {
-    const parsed = JSON.parse(readFileSync(ARCHIVE_PATH, "utf8"));
+    const parsed = JSON.parse(readFileSync(archivePath(), "utf8"));
     return Array.isArray(parsed) ? new Set(parsed) : new Set();
   } catch {
     return new Set();
@@ -1112,8 +1181,8 @@ function loadArchived() {
 
 function saveArchived(ids) {
   try {
-    mkdirSync(dirname(ARCHIVE_PATH), { recursive: true });
-    writeFileSync(ARCHIVE_PATH, JSON.stringify([...ids], null, 2));
+    mkdirSync(dirname(archivePath()), { recursive: true });
+    writeFileSync(archivePath(), JSON.stringify([...ids], null, 2));
   } catch {
     // Losing this un-hides sessions; it never loses data.
   }
@@ -1151,7 +1220,7 @@ const TITLE_PROMPT_PREFIX =
 
 function loadTitles() {
   try {
-    const parsed = JSON.parse(readFileSync(TITLES_PATH, "utf8"));
+    const parsed = JSON.parse(readFileSync(titlesPath(), "utf8"));
     return parsed && typeof parsed === "object" ? parsed : {};
   } catch {
     // Missing, unreadable, or corrupt all mean the same thing here: no titles
@@ -1162,8 +1231,8 @@ function loadTitles() {
 
 function saveTitles(titles) {
   try {
-    mkdirSync(dirname(TITLES_PATH), { recursive: true });
-    writeFileSync(TITLES_PATH, JSON.stringify(titles, null, 2));
+    mkdirSync(dirname(titlesPath()), { recursive: true });
+    writeFileSync(titlesPath(), JSON.stringify(titles, null, 2));
   } catch {
     // Losing the cache costs a regenerated title, not correctness.
   }
@@ -1304,6 +1373,7 @@ const server = createServer((req, res) => {
           return respond(res, 200, { ok: true, ignored: true });
         }
 
+        appendTranscript(id, "assistant", text);
         const claimed = deliverAnswer(id, text);
         // Logged, because the relay window is where this is watched from and
         // an unlogged POST is indistinguishable from no POST at all. `claimed`
@@ -1434,6 +1504,8 @@ const server = createServer((req, res) => {
         // being wrong is a race worth not having in the first place.
         markAsked(sessionId);
         rememberCloudSession(sessionId, { title: firstLine(text) });
+        appendTranscript(sessionId, "user", text);
+        appendTranscript(sessionId, "user", text);
         const waiting = awaitAnswer(sessionId, Number(body.timeoutMs) || 240_000);
 
         try {
@@ -1601,6 +1673,51 @@ const server = createServer((req, res) => {
     return;
   }
 
+  if (req.method === "POST" && req.url === "/cloud/add") {
+    readJSON(req)
+      .then((body) => {
+        const sessionId = parseCloudSessionId(body.sessionId);
+        if (!sessionId) return respond(res, 400, { error: "That doesn't look like a cloud session id." });
+        const title = typeof body.title === "string" && body.title.trim()
+          ? body.title.trim()
+          : null;
+        // Adding is an act of interest, so its answers are wanted from here on
+        // -- otherwise the first question asked would be refused by the probe.
+        markAsked(sessionId);
+        rememberCloudSession(sessionId, { title });
+        respond(res, 200, { ok: true, sessionId, title });
+      })
+      .catch((error) => respond(res, 400, { error: error.message }));
+    return;
+  }
+
+  if (req.method === "POST" && req.url === "/cloud/forget") {
+    readJSON(req)
+      .then((body) => {
+        const sessionId = parseCloudSessionId(body.sessionId);
+        if (!sessionId) return respond(res, 400, { error: "That doesn't look like a cloud session id." });
+        const state = loadCloud();
+        delete state[sessionId];
+        saveCloud(state);
+        // The session itself is untouched: it keeps running on claude.ai and
+        // can be added again from its link. Only this list forgets it.
+        respond(res, 200, { ok: true, forgot: sessionId });
+      })
+      .catch((error) => respond(res, 400, { error: error.message }));
+    return;
+  }
+
+  if (req.method === "GET" && req.url.startsWith("/cloud/transcript")) {
+    const asked = new URL(req.url, "http://relay").searchParams.get("sessionId") ?? "";
+    const sessionId = parseCloudSessionId(asked);
+    if (!sessionId) return respond(res, 400, { error: "That doesn't look like a cloud session id." });
+    // Everything the relay has seen pass through, which is not the same as
+    // everything the session contains -- anything said before it was added
+    // here happened where this relay could not see it.
+    respond(res, 200, { sessionId, messages: loadTranscript(sessionId) });
+    return;
+  }
+
   if (req.method === "GET" && req.url === "/cloud") {
     const state = loadCloud();
     respond(res, 200, {
@@ -1756,6 +1873,8 @@ export {
   markAsked,
   wasAsked,
   rememberCloudSession,
+  loadTranscript,
+  appendTranscript,
   extractSessionURL,
   parseCloudSessionId,
   cloudSendArgs,

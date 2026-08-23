@@ -524,7 +524,7 @@ final class ConversationViewModel: ObservableObject {
             : try await client.stopRemoteControl()
     }
 
-    /// Points the conversation at a cloud session.
+    /// Points the conversation at a cloud session and shows what we have of it.
     func useCloudSession(_ session: CloudSession) {
         store.save(self.session)
         var fresh = Session(model: settings.model.rawValue)
@@ -534,14 +534,35 @@ final class ConversationViewModel: ObservableObject {
         self.session = fresh
         activeCloudSessionID = session.cloudID
         activeProject = session.project ?? "Cloud"
-        let name = session.title ?? "this session"
+        state = .idle
+
+        Task { await loadCloudTranscript(named: session.title) }
+    }
+
+    /// Fills the screen with what the relay has seen pass through this session.
+    ///
+    /// Deliberately not everything the session contains. No API returns a cloud
+    /// session's messages, and the only thing that can fetch its history --
+    /// `--teleport` -- checks out its branch and makes a diverging copy, which
+    /// is far too much for showing what was said. So this is the relay's own
+    /// record, and the status line says so rather than implying the screen is
+    /// the whole conversation.
+    private func loadCloudTranscript(named title: String?) async {
+        let name = title ?? "this session"
+        guard let client = RelayClient.make(settings: settings) else { return }
+
+        let history = (try? await client.cloudTranscript(id: activeCloudSessionID)) ?? []
+        for entry in history {
+            append(entry)
+        }
+
         append(.init(
             kind: .status,
-            text: "Talking to \(name) on claude.ai. "
-                + "Answers run there and come back when the turn finishes, so there is a wait "
-                + "and nothing to speak as it arrives. Open it in the Claude app any time."
+            text: history.isEmpty
+                ? "Talking to \(name) on claude.ai. Anything said here before now happened where this app couldn't see it — the conversation itself is in the Claude app."
+                : "Talking to \(name) on claude.ai. Above is what has passed through this app; earlier turns are in the Claude app."
         ))
-        state = .idle
+        persist()
     }
 
     /// Leaves the cloud session and goes back to the relay's own Claude Code.
@@ -575,6 +596,22 @@ final class ConversationViewModel: ObservableObject {
             throw RelayError.notConfigured
         }
         return try await client.cloudSessions()
+    }
+
+    /// Adds a cloud session to the list from its link.
+    func addCloudSession(link: String, title: String = "") async throws -> CloudSession {
+        guard let client = RelayClient.make(settings: settings) else {
+            throw RelayError.notConfigured
+        }
+        return try await client.addCloudSession(link: link, title: title)
+    }
+
+    /// Removes one from the list. The session keeps running on claude.ai.
+    func forgetCloudSession(id: String) async throws {
+        guard let client = RelayClient.make(settings: settings) else {
+            throw RelayError.notConfigured
+        }
+        try await client.forgetCloudSession(id: id)
     }
 
     /// Re-pulls remembered cloud sessions so their local copies match the

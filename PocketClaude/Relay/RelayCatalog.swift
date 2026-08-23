@@ -256,6 +256,53 @@ extension RelayClient {
         }
     }
 
+    /// Adds a cloud session to the remembered list from its link.
+    ///
+    /// Adding is an act of interest, so the relay also marks its answers as
+    /// wanted — otherwise the first question asked would be refused by the
+    /// hook's own probe.
+    func addCloudSession(link: String, title: String = "") async throws -> CloudSession {
+        var body: [String: JSONValue] = ["sessionId": .string(link)]
+        if !title.isEmpty { body["title"] = .string(title) }
+        let json = try await post(path: "cloud/add", body: body, timeout: 20)
+        if let problem = json["error"]?.stringValue, !problem.isEmpty {
+            throw RelayError.relay(problem)
+        }
+        guard let id = json["sessionId"]?.stringValue else {
+            throw RelayError.relay("The relay didn't return a session id.")
+        }
+        return CloudSession(
+            cloudID: id,
+            localID: nil,
+            title: json["title"]?.stringValue,
+            project: nil,
+            updatedAt: Date()
+        )
+    }
+
+    /// Drops a session from the list. The session itself is untouched — it
+    /// keeps running on claude.ai and can be added again from its link.
+    func forgetCloudSession(id: String) async throws {
+        let json = try await post(path: "cloud/forget", body: ["sessionId": .string(id)], timeout: 20)
+        if let problem = json["error"]?.stringValue, !problem.isEmpty {
+            throw RelayError.relay(problem)
+        }
+    }
+
+    /// What the relay has seen pass through this session.
+    ///
+    /// Not the same as everything the session contains: anything said before it
+    /// was added here happened where this relay could not see it, and no API
+    /// exists to fetch that.
+    func cloudTranscript(id: String) async throws -> [TranscriptEntry] {
+        let json = try await getJSON(path: "cloud/transcript?sessionId=\(id)")
+        return (json["messages"]?.arrayValue ?? []).compactMap { entry in
+            guard let text = entry["text"]?.stringValue, !text.isEmpty else { return nil }
+            let role = entry["role"]?.stringValue ?? "assistant"
+            return TranscriptEntry(kind: role == "user" ? .user : .assistant, text: text)
+        }
+    }
+
     /// A quick liveness check, used before an operation that would otherwise
     /// sit for minutes.
     ///
