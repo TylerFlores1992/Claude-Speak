@@ -873,6 +873,35 @@ function saveCloud(state) {
   }
 }
 
+/**
+ * Records a cloud session as one worth remembering.
+ *
+ * Called wherever the relay deliberately touches a session -- teleporting it,
+ * starting it, or messaging it. Sending used to mark a session as *asked*
+ * without remembering it, so a session you had talked to never appeared in the
+ * phone's list and there was nothing to tap to talk to it again.
+ *
+ * Never overwrites a title that is already there: one set when the session was
+ * created describes the work, while the first line of a passing message
+ * usually does not.
+ */
+function rememberCloudSession(id, { title = null, project = null, cwd = null } = {}) {
+  const key = normalizeCloudId(id);
+  if (!key) return;
+  const state = loadCloud();
+  const existing = state[key] ?? {};
+  state[key] = {
+    ...existing,
+    localId: existing.localId ?? null,
+    previousIds: existing.previousIds ?? [],
+    title: existing.title ?? title,
+    project: existing.project ?? project,
+    cwd: existing.cwd ?? cwd,
+    updatedAt: new Date().toISOString(),
+  };
+  saveCloud(state);
+}
+
 /** Every local session id superseded by a later teleport of the same session. */
 function supersededLocalIds() {
   const ids = new Set();
@@ -1370,17 +1399,11 @@ const server = createServer((req, res) => {
         // list the phone can refresh. Starting a session is a stronger signal
         // of interest than pasting a link.
         markAsked(sessionId);
-        const state = loadCloud();
-        state[sessionId] = {
-          ...(state[sessionId] ?? {}),
-          localId: state[sessionId]?.localId ?? null,
-          previousIds: state[sessionId]?.previousIds ?? [],
+        rememberCloudSession(sessionId, {
           title: firstLine(task),
           project: basename(cwd),
           cwd,
-          updatedAt: new Date().toISOString(),
-        };
-        saveCloud(state);
+        });
 
         respond(res, 200, {
           sessionId,
@@ -1410,6 +1433,7 @@ const server = createServer((req, res) => {
         // miss it -- the inbox covers that, but only because of this order
         // being wrong is a race worth not having in the first place.
         markAsked(sessionId);
+        rememberCloudSession(sessionId, { title: firstLine(text) });
         const waiting = awaitAnswer(sessionId, Number(body.timeoutMs) || 240_000);
 
         try {
@@ -1468,6 +1492,7 @@ const server = createServer((req, res) => {
         // poll for it later, and a session the relay deliberately messaged is
         // one whose reply is wanted.
         markAsked(sessionId);
+        rememberCloudSession(sessionId, { title: firstLine(text) });
         // Queue-and-exit: the CLI confirms delivery, not an answer. Saying so
         // here keeps the phone from waiting for a reply that never comes.
         respond(res, 200, {
@@ -1730,6 +1755,7 @@ export {
   awaitAnswer,
   markAsked,
   wasAsked,
+  rememberCloudSession,
   extractSessionURL,
   parseCloudSessionId,
   cloudSendArgs,

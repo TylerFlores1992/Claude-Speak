@@ -534,9 +534,10 @@ final class ConversationViewModel: ObservableObject {
         self.session = fresh
         activeCloudSessionID = session.cloudID
         activeProject = session.project ?? "Cloud"
+        let name = session.title ?? "this session"
         append(.init(
             kind: .status,
-            text: "Talking to \u{201C}\(session.displayTitle)\u{201D} on claude.ai. "
+            text: "Talking to \(name) on claude.ai. "
                 + "Answers run there and come back when the turn finishes, so there is a wait "
                 + "and nothing to speak as it arrives. Open it in the Claude app any time."
         ))

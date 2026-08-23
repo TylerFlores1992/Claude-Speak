@@ -149,6 +149,33 @@ struct DashboardView: View {
 
                 Section {
                     Button {
+                        // Straight into the lane from the pasted link. Waiting
+                        // for the session to appear in a list first was the
+                        // long way round, and it only appears there once the
+                        // relay has touched it — which is a chicken and egg if
+                        // talking to it is the thing you came to do.
+                        viewModel.useCloudSession(CloudSession(
+                            cloudID: cloudSessionLink.trimmingCharacters(in: .whitespacesAndNewlines),
+                            localID: nil,
+                            title: nil,
+                            project: teleportProject.isEmpty ? nil : teleportProject,
+                            updatedAt: Date()
+                        ))
+                        viewModel.settings.lastCloudSessionLink = cloudSessionLink
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                        isBringingCloudSession = false
+                    } label: {
+                        Label("Talk to it by voice", systemImage: "mic.fill")
+                    }
+                    .disabled(!hasCloudLink)
+                } header: {
+                    Text("Talk to it where it is")
+                } footer: {
+                    Text("Questions run in that session on claude.ai and the answer is spoken here when the turn finishes. The conversation stays there — open it in the Claude app any time.")
+                }
+
+                Section {
+                    Button {
                         Task { await bringCloudSession() }
                     } label: {
                         HStack {
