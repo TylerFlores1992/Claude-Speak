@@ -682,6 +682,41 @@ function wasAsked(id) {
   return true;
 }
 
+// Sessions that have been asked for their history.
+//
+// The relay cannot read a cloud session's past: there is no API for it, and
+// --teleport only resumes a teleport session, not an arbitrary cloud one. But
+// the Stop hook runs *inside* that session's VM, and the payload it receives
+// carries `transcript_path` -- the conversation, on disk, next to the hook.
+//
+// So asking for history means leaving a note for the hook to find. The next
+// time that session finishes a turn, it reads its own transcript and posts it
+// back. A pull therefore sends no message and forces no turn of its own; it
+// rides along with the session's next reply, which is almost always the very
+// next thing to happen, because the next thing you do is talk to it.
+const historyWanted = new Set();
+
+function requestHistory(id) {
+  const key = normalizeCloudId(id);
+  if (!key) return false;
+  historyWanted.add(key);
+  // A pull is also a reason to want this session's answers: the hook checks
+  // that before it sends anything at all, so without this the note would sit
+  // unread behind the very gate it is waiting on.
+  markAsked(key);
+  return true;
+}
+
+function wantsHistory(id) {
+  const key = normalizeCloudId(id);
+  return key ? historyWanted.has(key) : false;
+}
+
+function clearHistoryWant(id) {
+  const key = normalizeCloudId(id);
+  if (key) historyWanted.delete(key);
+}
+
 /** Hands an answer to whoever is waiting, or holds it for whoever asks next. */
 function deliverAnswer(id, text) {
   const key = normalizeCloudId(id);
@@ -916,6 +951,15 @@ function appendTranscript(id, role, text) {
   const path = transcriptPath(id);
   if (!path || typeof text !== "string" || !text.trim()) return;
   const entries = loadTranscript(id);
+
+  // A pulled history and the answer to the turn that carried it can describe
+  // the same message twice: the hook sends the transcript, then sends the
+  // answer, and whether the transcript had caught up by then decides whether
+  // they overlap. Saying the same thing twice in a row is always the artefact,
+  // never the conversation.
+  const last = entries[entries.length - 1];
+  if (last && last.role === role && last.text === text) return;
+
   entries.push({ role, text, at: new Date().toISOString() });
   try {
     mkdirSync(transcriptDir(), { recursive: true });
@@ -923,6 +967,48 @@ function appendTranscript(id, role, text) {
   } catch {
     // A lost transcript costs history, never an answer.
   }
+}
+
+/**
+ * Replaces a session's record with the history pulled from the session itself.
+ *
+ * What the hook sends is the real conversation, including everything said
+ * before this relay had ever heard of the session -- so it supersedes the
+ * relay's own notes rather than being appended to them. Anything the relay
+ * recorded is in there too, said by the same two people in the same order.
+ *
+ * Marked `pulled` so the phone can say where the history came from, and so a
+ * second pull is visibly a refresh rather than a duplicate.
+ */
+function replaceTranscript(id, messages) {
+  const path = transcriptPath(id);
+  if (!path || !Array.isArray(messages)) return 0;
+
+  const clean = [];
+  for (const entry of messages) {
+    if (!entry || typeof entry !== "object") continue;
+    const role = entry.role === "assistant" ? "assistant" : entry.role === "user" ? "user" : null;
+    const text = typeof entry.text === "string" ? entry.text.trim() : "";
+    // A turn with no text of its own -- a bare tool call, an attachment -- is
+    // not something to show on a phone.
+    if (!role || !text) continue;
+    clean.push({
+      role,
+      text,
+      at: typeof entry.at === "string" ? entry.at : new Date().toISOString(),
+      pulled: true,
+    });
+  }
+  if (!clean.length) return 0;
+
+  try {
+    mkdirSync(transcriptDir(), { recursive: true });
+    writeFileSync(path, JSON.stringify(clean.slice(-TRANSCRIPT_LIMIT), null, 2));
+  } catch {
+    // A lost transcript costs history, never an answer.
+    return 0;
+  }
+  return Math.min(clean.length, TRANSCRIPT_LIMIT);
 }
 
 /**
@@ -1361,8 +1447,25 @@ const server = createServer((req, res) => {
         // Deliberately the same path as delivery: the relay is published to the
         // internet through a single path-scoped Funnel mount, and a second
         // endpoint would mean a second mount for everyone setting this up.
+        // History arrives on this same path for the same reason, and is
+        // recognised by carrying `messages` instead of `text`.
+        if (Array.isArray(body.messages)) {
+          if (!wanted) {
+            console.log(`history: ${id} ignored (this relay didn't ask that session)`);
+            return respond(res, 200, { ok: true, ignored: true });
+          }
+          const count = replaceTranscript(id, body.messages);
+          clearHistoryWant(id);
+          rememberCloudSession(id);
+          console.log(`history: ${id} pulled ${count} messages`);
+          return respond(res, 200, { ok: true, sessionId: id, messages: count });
+        }
+
         if (!text.trim()) {
-          return respond(res, 200, { ok: true, wanted });
+          // `wantHistory` is the note the hook came to check for. It is only
+          // ever true once per pull: the hook answers it on the next turn and
+          // the flag is cleared when the history lands.
+          return respond(res, 200, { ok: true, wanted, wantHistory: wanted && wantsHistory(id) });
         }
 
         if (!wanted) {
@@ -1500,11 +1603,11 @@ const server = createServer((req, res) => {
 
         // Start waiting before sending. A short turn can finish before the
         // send call even returns, and a waiter registered afterwards would
-        // miss it -- the inbox covers that, but only because of this order
-        // being wrong is a race worth not having in the first place.
+        // miss it. The inbox would still catch it, but a race you can avoid by
+        // ordering two lines correctly is not a race worth relying on a
+        // safety net for.
         markAsked(sessionId);
         rememberCloudSession(sessionId, { title: firstLine(text) });
-        appendTranscript(sessionId, "user", text);
         appendTranscript(sessionId, "user", text);
         const waiting = awaitAnswer(sessionId, Number(body.timeoutMs) || 240_000);
 
@@ -1711,10 +1814,34 @@ const server = createServer((req, res) => {
     const asked = new URL(req.url, "http://relay").searchParams.get("sessionId") ?? "";
     const sessionId = parseCloudSessionId(asked);
     if (!sessionId) return respond(res, 400, { error: "That doesn't look like a cloud session id." });
-    // Everything the relay has seen pass through, which is not the same as
-    // everything the session contains -- anything said before it was added
-    // here happened where this relay could not see it.
-    respond(res, 200, { sessionId, messages: loadTranscript(sessionId) });
+    const messages = loadTranscript(sessionId);
+    // Whether this is the session's own history or only the part of it that
+    // happened to pass through here. The phone says which, so a short record
+    // reads as "nothing pulled yet" rather than "nothing was said".
+    const pulled = messages.some((m) => m.pulled);
+    respond(res, 200, { sessionId, messages, pulled, pullPending: wantsHistory(sessionId) });
+    return;
+  }
+
+  // Asks a cloud session for its own history. This sends no message and forces
+  // no turn: it leaves a note that the session's Stop hook reads the next time
+  // it finishes one, so the history arrives alongside the next reply.
+  if (req.method === "POST" && req.url === "/cloud/pull") {
+    readJSON(req)
+      .then((body) => {
+        const sessionId = parseCloudSessionId(body.sessionId);
+        if (!sessionId) return respond(res, 400, { error: "That doesn't look like a cloud session id." });
+        if (!ANSWER_TOKEN) {
+          return respond(res, 503, {
+            error: "Set RELAY_ANSWER_TOKEN and install the Stop hook, or history can never come back.",
+          });
+        }
+        requestHistory(sessionId);
+        rememberCloudSession(sessionId);
+        console.log(`pull: ${sessionId} will send its history after its next turn`);
+        respond(res, 200, { ok: true, sessionId, requested: true });
+      })
+      .catch((error) => respond(res, 400, { error: error.message }));
     return;
   }
 
@@ -1872,6 +1999,10 @@ export {
   awaitAnswer,
   markAsked,
   wasAsked,
+  requestHistory,
+  wantsHistory,
+  clearHistoryWant,
+  replaceTranscript,
   rememberCloudSession,
   loadTranscript,
   appendTranscript,

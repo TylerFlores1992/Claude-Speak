@@ -165,7 +165,8 @@ Everything except `/health` requires `Authorization: Bearer $RELAY_TOKEN`.
 | `POST` | `/cloud/start` | Starts a new cloud session with a first task and returns its id. Refuses in practice — `--cloud` needs a terminal, and says so. |
 | `POST` | `/cloud/add` | Adds a session to the remembered list from its link, and marks its answers as wanted. |
 | `POST` | `/cloud/forget` | Drops one from the list. The session itself keeps running on claude.ai. |
-| `GET` | `/cloud/transcript?sessionId=` | What the relay has seen pass through a session. Not its full history — see below. |
+| `GET` | `/cloud/transcript?sessionId=` | A session's conversation: the relay's own record, or its real history once pulled. |
+| `POST` | `/cloud/pull` | Asks a session for its own history. Sends no message and starts no turn — it arrives with the next reply. |
 | `POST` | `/cloud/answer` | Where the Stop hook delivers a finished turn. Takes the narrow `RELAY_ANSWER_TOKEN`, and is the one route outside the main auth gate. |
 | `GET` | `/cloud` | Cloud sessions pulled here before. |
 | `POST` | `/cloud/refresh` | Re-pulls one or all of them. |
@@ -207,14 +208,23 @@ machine acting only as courier. Setup is in [`hooks/README.md`](hooks/README.md)
 
 ### What a transcript is, and is not
 
-No API returns a cloud session's messages, and `--teleport` — the only thing
-that can fetch its history — checks out its branch and makes a diverging copy,
-which is far too much for showing what was said.
+Two things can be in `RELAY_STATE_DIR/transcripts/`, and the app says which is
+on screen.
 
-So the relay keeps its own record: every question it sends and every answer the
-hook returns, in `RELAY_STATE_DIR/transcripts/`. Exact from the moment a session
-joins the list, and silent about anything said before that. The app says so on
-screen rather than implying it is showing the whole conversation.
+By default it is the relay's own record: every question it sent and every answer
+the hook returned. Exact from the moment a session joins the list, and silent
+about anything said before that.
+
+Tapping **History** in the app replaces that with the session's real
+conversation. No API returns a cloud session's messages — and `--teleport` only
+resumes an existing teleport session, not an arbitrary cloud one — but the Stop
+hook runs *inside* the session, where the transcript is on disk and its path is
+handed to the hook. `POST /cloud/pull` leaves a note that the hook collects on
+its next probe, and the history comes back with the next reply.
+
+So a pull sends no message and starts no turn: nothing about it shows up in the
+conversation on claude.ai. Only plain user and assistant text is sent, never
+tool calls or attachments. See `relay/hooks/README.md`.
 
 For one session visible in two places at once, `/remote-control` starts
 `claude remote-control`, a server that serves local sessions to claude.ai and

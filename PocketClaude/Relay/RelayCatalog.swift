@@ -289,17 +289,43 @@ extension RelayClient {
         }
     }
 
-    /// What the relay has seen pass through this session.
+    /// What the app can show of a cloud session's conversation.
     ///
-    /// Not the same as everything the session contains: anything said before it
-    /// was added here happened where this relay could not see it, and no API
-    /// exists to fetch that.
-    func cloudTranscript(id: String) async throws -> [TranscriptEntry] {
+    /// Either the relay's own notes — the questions this app sent and the
+    /// answers that came back — or, once pulled, the session's real history.
+    /// `pulled` says which, and `pullPending` says a pull is waiting on the
+    /// session's next turn.
+    struct CloudHistory {
+        var messages: [TranscriptEntry]
+        var pulled: Bool
+        var pullPending: Bool
+    }
+
+    func cloudTranscript(id: String) async throws -> CloudHistory {
         let json = try await getJSON(path: "cloud/transcript?sessionId=\(id)")
-        return (json["messages"]?.arrayValue ?? []).compactMap { entry in
+        let messages = (json["messages"]?.arrayValue ?? []).compactMap { entry -> TranscriptEntry? in
             guard let text = entry["text"]?.stringValue, !text.isEmpty else { return nil }
             let role = entry["role"]?.stringValue ?? "assistant"
             return TranscriptEntry(kind: role == "user" ? .user : .assistant, text: text)
+        }
+        return CloudHistory(
+            messages: messages,
+            pulled: json["pulled"]?.boolValue ?? false,
+            pullPending: json["pullPending"]?.boolValue ?? false
+        )
+    }
+
+    /// Asks a cloud session to send back its own conversation.
+    ///
+    /// This sends no message and forces no turn. The relay leaves a note that
+    /// the session's Stop hook — which runs inside the session, where the
+    /// transcript actually is — reads the next time the session finishes a
+    /// turn. So the history arrives alongside the next reply, which in practice
+    /// means the next thing you say to it.
+    func pullCloudHistory(id: String) async throws {
+        let json = try await post(path: "cloud/pull", body: ["sessionId": .string(id)], timeout: 20)
+        if let problem = json["error"]?.stringValue, !problem.isEmpty {
+            throw RelayError.relay(problem)
         }
     }
 

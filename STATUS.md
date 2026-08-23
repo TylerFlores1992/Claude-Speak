@@ -1,7 +1,7 @@
 # Where this stands
 
-Updated after the session that shipped swipe-to-archive and the live-session
-dot. Read this first when picking the project back up.
+Updated after the session that proved the cloud round trip on real hardware and
+built history pulling. Read this first when picking the project back up.
 
 ## The setup
 
@@ -31,10 +31,6 @@ dot. Read this first when picking the project back up.
 
 Be honest about these rather than describing them as working:
 
-- **`/teleport`** — pulling a claude.ai cloud session onto the relay. Built to
-  the documented CLI contract; never run against a real cloud session. The most
-  likely failure is teleport wanting a terminal, which will error rather than
-  hang because stdin is closed.
 - **`/cloud/send`** — queueing a message into a cloud session.
 - **Remote Control** (`Watch live`) — gated on a research-preview flag.
   **`claude remote-control` on the mini PC is the one command that decides
@@ -48,6 +44,15 @@ Be honest about these rather than describing them as working:
 
 ## Known dead ends, with the reason
 
+- **`--teleport` cannot fetch a cloud session's history.** Tested directly
+  against a real idle cloud session, with and without a TTY: it exits 1 and
+  prints nothing on either stream. The flag resumes an existing *teleport*
+  session, not an arbitrary cloud one. `/teleport` and the app's "Bring it
+  here" are built on a contract the CLI does not offer.
+- **The MCP session tools are not available to the relay.** `list_sessions`
+  and friends are injected into a cloud session by its harness; `claude mcp
+  list` on a plain CLI shows no servers, so the relay cannot enumerate or read
+  cloud sessions that way.
 - **Creating a cloud session from the relay.** `claude --cloud "<task>"` refuses
   unless it has a terminal: "Non-interactive invocations run locally and would
   silently ignore --cloud." The relay spawns with piped stdout, so this cannot
@@ -75,6 +80,21 @@ Do not re-attempt these without new information:
   `.claude/settings.json` SessionStart hooks, `.claude/rules|skills|agents` —
   is the portable alternative and works locally *and* in the cloud.
 
+## Pulling a session's history — how it actually works
+
+Verified end to end against a real relay and a real transcript file.
+
+The Stop hook payload carries `transcript_path` (confirmed by capturing a live
+payload: `session_id`, `transcript_path`, `cwd`, `last_assistant_message`, and
+more). The hook runs inside the cloud session, so it can read the conversation
+the relay cannot reach.
+
+`POST /cloud/pull` sets a flag; the probe the hook already makes at the end of
+every turn reports it as `wantHistory`; the hook reads its own transcript,
+keeps only plain user and assistant text, and posts it back on the same path.
+No message is sent and no turn is started, so nothing about a pull appears in
+the conversation on claude.ai.
+
 ## The cloud round trip
 
 The proof is built and passes end to end under test: `/cloud/ask` queues a
@@ -84,20 +104,24 @@ it. `relay/hooks/README.md` has the install.
 
 This is the path that makes the work genuinely flow through Claude — the session
 is claude.ai's own, visible in the Claude app, with the relay acting only as
-courier. **Never run against a real cloud session yet.** The remaining unknowns
-are whether a Stop hook fires as documented inside a cloud VM and whether that
-VM can reach the relay through Tailscale Funnel. Both are one trial away.
+courier.
+
+**Confirmed on real infrastructure**, in three parts: a Stop hook inside a cloud
+VM reached the relay through Tailscale Funnel and delivered a finished turn
+(`answer: session_01R9kxxy... 233 chars (buffered)`); a message queued into a
+cloud session; and both ends showed the same conversation. The two unknowns
+this section used to list — whether the hook fires in a cloud VM, and whether
+that VM can reach the relay — are both answered yes.
 
 ## Open threads
 
-1. **Prove the cloud round trip against a real session.** Install the Stop
-   hook in campsite-finder, set `RELAY_ANSWER_TOKEN`, start Tailscale Funnel,
-   and ask a cloud session something. This is the go/no-go for making cloud
-   sessions the default lane.
-2. **Run `claude remote-control` on the mini PC.** Decides the local half of
-   session merging. Independent of the above; the two lanes complement.
-3. **Try `Bring it here`** with a real claude.ai session link — the first
-   actual test of teleport.
+1. **Remove what is now known to be dead.** `/teleport` and the app's "Bring it
+   here" cannot work — see the dead ends above. The button is still on screen.
+2. **Simplify around cloud sessions.** The dashboard still carries local
+   sessions, teleport, and Remote Control alongside the lane that actually
+   works. Stated preference: less is more.
+3. **Run `claude remote-control` on the mini PC.** Decides the local half of
+   session merging — worth knowing before deciding whether to cut it.
 4. **Scaffold repo config for campsite-finder** — a `.claude/settings.json`
    SessionStart hook plus `scripts/setup.sh`, so setup travels with the repo
    into both cloud sessions and relay sessions. Offered, not yet started.

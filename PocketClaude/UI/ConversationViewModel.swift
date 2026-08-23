@@ -455,6 +455,16 @@ final class ConversationViewModel: ObservableObject {
     /// device, mid-flight, and picked up there.
     @Published var activeCloudSessionID: String = ""
 
+    /// The name of the cloud session on screen, for the lines that mention it.
+    @Published var cloudSessionTitle: String?
+
+    /// Whether this session's real history has yet to be brought over. False
+    /// once it has: pulling twice would only fetch the same conversation again.
+    @Published var canPullHistory: Bool = false
+
+    /// A pull has been asked for and is waiting on the session's next turn.
+    @Published var pullPending: Bool = false
+
     /// The workspace name to send with a question, or "" to let the relay
     /// decide.
     ///
@@ -533,35 +543,81 @@ final class ConversationViewModel: ObservableObject {
         fresh.relaySessionID = nil
         self.session = fresh
         activeCloudSessionID = session.cloudID
+        cloudSessionTitle = session.title
         activeProject = session.project ?? "Cloud"
         state = .idle
 
         Task { await loadCloudTranscript(named: session.title) }
     }
 
-    /// Fills the screen with what the relay has seen pass through this session.
+    /// Fills the screen with this session's conversation.
     ///
-    /// Deliberately not everything the session contains. No API returns a cloud
-    /// session's messages, and the only thing that can fetch its history --
-    /// `--teleport` -- checks out its branch and makes a diverging copy, which
-    /// is far too much for showing what was said. So this is the relay's own
-    /// record, and the status line says so rather than implying the screen is
-    /// the whole conversation.
+    /// Two things can be on screen here, and the status line always says which.
+    /// Before a pull, it is only the relay's own notes: what this app sent and
+    /// what came back. After one, it is the session's real history, read out of
+    /// the session by its own Stop hook.
     private func loadCloudTranscript(named title: String?) async {
         let name = title ?? "this session"
         guard let client = RelayClient.make(settings: settings) else { return }
 
-        let history = (try? await client.cloudTranscript(id: activeCloudSessionID)) ?? []
-        for entry in history {
+        let history = try? await client.cloudTranscript(id: activeCloudSessionID)
+        let messages = history?.messages ?? []
+        for entry in messages {
             append(entry)
         }
+        // Nothing came back at all, which is not the same as a session with
+        // nothing in it. Offering to pull from a relay that could not be
+        // reached would fail on the tap instead of here.
+        guard let history else {
+            canPullHistory = false
+            pullPending = false
+            append(.init(
+                kind: .status,
+                text: "Talking to \(name) on claude.ai, but the relay didn't answer — its history can't be fetched until it does."
+            ))
+            persist()
+            return
+        }
 
-        append(.init(
-            kind: .status,
-            text: history.isEmpty
-                ? "Talking to \(name) on claude.ai. Anything said here before now happened where this app couldn't see it — the conversation itself is in the Claude app."
-                : "Talking to \(name) on claude.ai. Above is what has passed through this app; earlier turns are in the Claude app."
-        ))
+        canPullHistory = !history.pulled
+        pullPending = history.pullPending
+
+        append(.init(kind: .status, text: cloudStatusLine(name: name, count: messages.count)))
+        persist()
+    }
+
+    private func cloudStatusLine(name: String, count: Int) -> String {
+        if !canPullHistory {
+            return "Talking to \(name) on claude.ai. Above is the conversation, pulled from the session itself."
+        }
+        if pullPending {
+            return "Talking to \(name) on claude.ai. Its history is on the way — it arrives with the next reply."
+        }
+        if count == 0 {
+            return "Talking to \(name) on claude.ai. Nothing has passed through this app yet. Pull history to bring the conversation over."
+        }
+        return "Talking to \(name) on claude.ai. Above is what has passed through this app. Pull history for the rest."
+    }
+
+    /// Asks the session for its own conversation.
+    ///
+    /// Nothing is sent to the session and no turn is started, so nothing here
+    /// appears in the conversation on claude.ai. The relay leaves a note; the
+    /// session's Stop hook answers it the next time the session finishes a
+    /// turn. Usually that is the next thing you say to it, which is why this
+    /// says "with the next reply" rather than promising it now.
+    func pullCloudHistory() async {
+        guard !activeCloudSessionID.isEmpty, let client = RelayClient.make(settings: settings) else { return }
+        do {
+            try await client.pullCloudHistory(id: activeCloudSessionID)
+            pullPending = true
+            append(.init(
+                kind: .status,
+                text: "Asked \(cloudSessionTitle ?? "this session") for its history. It arrives with the next reply — say something to it and the conversation comes with the answer."
+            ))
+        } catch {
+            append(.init(kind: .status, text: "Couldn't ask for the history: \(error.localizedDescription)"))
+        }
         persist()
     }
 
@@ -569,6 +625,9 @@ final class ConversationViewModel: ObservableObject {
     func leaveCloudSession() {
         guard !activeCloudSessionID.isEmpty else { return }
         activeCloudSessionID = ""
+        cloudSessionTitle = nil
+        canPullHistory = false
+        pullPending = false
         newSession()
     }
 

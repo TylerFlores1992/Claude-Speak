@@ -21,7 +21,79 @@
 // phone. Missing configuration, an unreachable relay, and a rejected token all
 // exit 0 with nothing printed unless RELAY_HOOK_DEBUG is set.
 
+import { readFileSync } from "fs";
+
 const DEBUG = process.env.RELAY_HOOK_DEBUG === "1";
+
+// A phone renders a scrollback, not an archive. Enough to read back through a
+// working session, small enough to post in one request.
+const HISTORY_LIMIT = 200;
+const HISTORY_CHARS = 400_000;
+
+/**
+ * Reads the conversation this session is having, from the session's own disk.
+ *
+ * The relay has no way to fetch a cloud session's history -- but this hook is
+ * running inside that session, and the payload hands it `transcript_path`.
+ * That file is JSONL, one record per line, of which only the plain user and
+ * assistant turns are worth showing on a phone.
+ *
+ * Tool calls, attachments, and the various bookkeeping records are skipped on
+ * purpose. They are the bulk of the file, they are meaningless without the
+ * tooling that made them, and they are the records most likely to be carrying
+ * something -- a file, a command, a key -- that has no business leaving this
+ * VM for a phone's reference pane.
+ */
+function readHistory(transcriptPath) {
+  if (typeof transcriptPath !== "string" || !transcriptPath) return [];
+
+  let raw;
+  try {
+    raw = readFileSync(transcriptPath, "utf8");
+  } catch (error) {
+    note(`could not read the transcript: ${error.message}`);
+    return [];
+  }
+
+  const messages = [];
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    let record;
+    try {
+      record = JSON.parse(line);
+    } catch {
+      // A partially written last line is normal: the transcript is appended to
+      // while this runs. Skip it rather than abandoning the whole history.
+      continue;
+    }
+    const role = record?.message?.role;
+    if (role !== "user" && role !== "assistant") continue;
+
+    const content = record.message.content;
+    let text = "";
+    if (typeof content === "string") {
+      text = content;
+    } else if (Array.isArray(content)) {
+      // Text blocks only -- a tool_use block is skipped by having no `text`.
+      text = content
+        .filter((block) => block?.type === "text" && typeof block.text === "string")
+        .map((block) => block.text)
+        .join("\n");
+    }
+    text = text.trim();
+    if (!text) continue;
+
+    messages.push({ role, text, at: record.timestamp ?? undefined });
+  }
+
+  // Trim from the front: the recent end of a conversation is the part worth
+  // having when only part of it fits.
+  let trimmed = messages.slice(-HISTORY_LIMIT);
+  while (trimmed.length > 1 && JSON.stringify(trimmed).length > HISTORY_CHARS) {
+    trimmed = trimmed.slice(Math.ceil(trimmed.length / 10));
+  }
+  return trimmed;
+}
 
 function note(message) {
   if (DEBUG) process.stderr.write(`answer-to-relay: ${message}\n`);
@@ -65,15 +137,15 @@ async function main() {
   }
 
   // `last_assistant_message` is handed to Stop hooks directly. The transcript
-  // is written asynchronously and lags behind, so reading it here would
-  // sometimes send the previous turn's answer.
+  // is written asynchronously and lags behind, so reading *this turn's* answer
+  // out of it would sometimes send the previous turn's instead.
+  //
+  // History is the opposite case and can be read from the file safely: it is
+  // wanted for the turns already finished, and the one this lags by is the one
+  // being sent alongside it anyway.
   const text = typeof payload.last_assistant_message === "string"
     ? payload.last_assistant_message.trim()
     : "";
-  if (!text) {
-    note("no last_assistant_message on this turn");
-    return;
-  }
 
   // The cloud session's own id, which is what the phone asked against.
   // CLAUDE_CODE_REMOTE_SESSION_ID is the cse_ spelling of the same session;
@@ -108,17 +180,37 @@ async function main() {
     //
     // Set RELAY_ANSWER_ALWAYS=1 to skip the check, which is useful when
     // proving the path works and nothing has asked anything yet.
+    let wantHistory = false;
     if (process.env.RELAY_ANSWER_ALWAYS !== "1") {
       const probe = await post({ sessionId });
       if (!probe.ok) {
         note(`relay replied ${probe.status} to the probe`);
         return;
       }
-      const { wanted } = await probe.json().catch(() => ({}));
-      if (!wanted) {
+      const answered = await probe.json().catch(() => ({}));
+      if (!answered.wanted) {
         note("relay did not ask this session; not sending the answer");
         return;
       }
+      // The probe is also where a pull request is collected. Someone tapped
+      // "pull" on the phone; this is the first turn to finish since, so this
+      // is the turn that carries the history back.
+      wantHistory = answered.wantHistory === true;
+    }
+
+    if (wantHistory) {
+      const messages = readHistory(payload.transcript_path);
+      if (messages.length) {
+        const sent = await post({ sessionId, messages });
+        note(`sent ${messages.length} messages of history; relay replied ${sent.status}`);
+      } else {
+        note("history was asked for but the transcript had nothing readable in it");
+      }
+    }
+
+    if (!text) {
+      note("no last_assistant_message on this turn");
+      return;
     }
 
     const response = await post({ sessionId, text });

@@ -23,8 +23,13 @@ import {
   deliverAnswer,
   awaitAnswer,
   markAsked,
+  wasAsked,
   loadTranscript,
   appendTranscript,
+  requestHistory,
+  wantsHistory,
+  clearHistoryWant,
+  replaceTranscript,
   resolveSessionCwd,
   sessionFilePath,
   parseLiveIds,
@@ -710,6 +715,97 @@ test("a transcript cannot be read or written outside its directory", () => {
     assert.deepEqual(loadTranscript(attempt), [], `read ${attempt}`);
     appendTranscript(attempt, "user", "should not be written");
     assert.deepEqual(loadTranscript(attempt), [], `wrote ${attempt}`);
+  }
+});
+
+test("the same thing said twice in a row is recorded once", () => {
+  // A pulled history and the answer to the turn that carried it can describe
+  // the same message twice.
+  appendTranscript("session_01DUP", "assistant", "Done.");
+  appendTranscript("session_01DUP", "assistant", "Done.");
+  assert.equal(loadTranscript("session_01DUP").length, 1);
+  // Only consecutively, though -- a session really can answer "Done." twice.
+  appendTranscript("session_01DUP", "user", "and the other one?");
+  appendTranscript("session_01DUP", "assistant", "Done.");
+  assert.equal(loadTranscript("session_01DUP").length, 3);
+});
+
+// --- Pulling a session's own history ---------------------------------------
+//
+// The relay cannot read a cloud session's past. Its Stop hook can, because it
+// runs inside that session with `transcript_path` in its payload. So a pull is
+// a note left for the hook: the probe it already makes at the end of every
+// turn is where it finds out that history was asked for.
+
+test("a pull is invisible until the hook asks", () => {
+  assert.equal(wantsHistory("session_01PULL"), false);
+  requestHistory("session_01PULL");
+  assert.equal(wantsHistory("session_01PULL"), true);
+});
+
+test("a pull is answered once, not on every turn after", () => {
+  requestHistory("session_01ONCE");
+  assert.equal(wantsHistory("session_01ONCE"), true);
+  clearHistoryWant("session_01ONCE");
+  assert.equal(wantsHistory("session_01ONCE"), false);
+});
+
+test("a pull also marks the session as one whose answers are wanted", () => {
+  // Otherwise the note would sit unread behind the gate it waits on: the hook
+  // checks `wanted` first and returns before it ever looks at the history.
+  requestHistory("session_01GATE");
+  assert.equal(wasAsked("session_01GATE"), true);
+});
+
+test("a pull is found under either id spelling", () => {
+  requestHistory("cse_01SPELL");
+  assert.equal(wantsHistory("session_01SPELL"), true);
+});
+
+test("pulled history replaces the relay's own notes", () => {
+  // What the hook sends is the real conversation, including everything said
+  // before this relay had heard of the session, so it supersedes rather than
+  // appends.
+  appendTranscript("session_01REPL", "user", "only what passed through here");
+  const written = replaceTranscript("session_01REPL", [
+    { role: "user", text: "said long before the relay existed" },
+    { role: "assistant", text: "and answered then too" },
+  ]);
+  assert.equal(written, 2);
+  const entries = loadTranscript("session_01REPL");
+  assert.equal(entries.length, 2);
+  assert.equal(entries[0].text, "said long before the relay existed");
+  assert.ok(entries.every((entry) => entry.pulled === true));
+});
+
+test("pulled history keeps only what a person said or was told", () => {
+  const written = replaceTranscript("session_01CLEAN", [
+    { role: "user", text: "what is left?" },
+    { role: "system", text: "a system record" },
+    { role: "assistant", text: "   " },
+    { role: "assistant", text: "this" },
+    null,
+    "not an object",
+  ]);
+  assert.equal(written, 2);
+  assert.deepEqual(
+    loadTranscript("session_01CLEAN").map((entry) => entry.role),
+    ["user", "assistant"]
+  );
+});
+
+test("a history of nothing usable leaves the record alone", () => {
+  appendTranscript("session_01KEEP", "user", "worth keeping");
+  assert.equal(replaceTranscript("session_01KEEP", []), 0);
+  assert.equal(replaceTranscript("session_01KEEP", [{ role: "system", text: "no" }]), 0);
+  assert.equal(replaceTranscript("session_01KEEP", "not an array"), 0);
+  assert.equal(loadTranscript("session_01KEEP").length, 1);
+});
+
+test("history cannot be written outside the transcript directory", () => {
+  for (const attempt of ["../../etc/passwd", "a/b", "..", ""]) {
+    assert.equal(replaceTranscript(attempt, [{ role: "user", text: "no" }]), 0, attempt);
+    assert.deepEqual(loadTranscript(attempt), [], attempt);
   }
 });
 
