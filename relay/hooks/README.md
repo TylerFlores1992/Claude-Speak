@@ -59,6 +59,19 @@ because the hook travels with the checkout rather than the container.
 
 ## Install
 
+The script does all of this, including the parts that fail quietly:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\relay\install-hook.ps1 -Repo C:\code\your-repo -Commit
+```
+
+It merges into an existing `settings.json` rather than replacing it, writes
+UTF-8 without a BOM, and reads the result back with Node to prove it parses.
+Then set the two environment variables (step 2 below) and you are done.
+
+The rest of this section is what the script does, for anyone doing it by hand
+or on a machine without PowerShell.
+
 **1. Commit the hook to the repository you work in.** Copy
 `answer-to-relay.mjs` to `.claude/hooks/` there, and add to that repository's
 `.claude/settings.json`:
@@ -143,6 +156,13 @@ environment dialog:
 |---|---|
 | `RELAY_ANSWER_URL` | `https://<your-funnel-host>/answer` |
 | `RELAY_ANSWER_TOKEN` | the token from step 2 |
+
+**The app has both ready to copy.** Settings -> Cloud session setup reads them
+from the relay: the token is its own, and the URL is whatever the funnel is
+actually publishing, read from `tailscale funnel status` rather than assumed.
+The token is copied to the clipboard and never drawn on screen, because a
+settings screen is the most screenshotted part of an app when something is not
+working.
 
 The URL ends in `/answer`, the path the funnel publishes — not `/cloud/answer`,
 which is the route it forwards to on the relay. Getting this wrong is silent:

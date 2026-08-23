@@ -22,6 +22,10 @@ import {
   cleanTitle,
   deliverAnswer,
   discardBufferedAnswer,
+  rememberProbe,
+  hasProbed,
+  silenceReason,
+  parseFunnelURL,
   awaitAnswer,
   markAsked,
   wasAsked,
@@ -771,6 +775,102 @@ test("discarding nothing is not an error", () => {
 test("a discarded answer is found under either id spelling", () => {
   deliverAnswer("session_01SPELLED", "buffered");
   assert.equal(discardBufferedAnswer("cse_01SPELLED"), true);
+});
+
+// --- Knowing why a session is silent --------------------------------------
+//
+// The hook probes before it sends anything, so a session that has never probed
+// has never run the hook. Without that distinction a missing hook fails exactly
+// like a slow turn: silence until a timeout, with nothing to act on.
+
+test("a session that has never probed is a session with no hook", () => {
+  assert.equal(hasProbed("session_01NOHOOK"), false);
+  assert.match(silenceReason("session_01NOHOOK"), /never reported back/);
+  assert.match(silenceReason("session_01NOHOOK"), /Stop hook/);
+});
+
+test("a session that has probed is simply still working", () => {
+  rememberProbe("session_01HASHOOK");
+  assert.equal(hasProbed("session_01HASHOOK"), true);
+  assert.match(silenceReason("session_01HASHOOK"), /still running/);
+  assert.doesNotMatch(silenceReason("session_01HASHOOK"), /Stop hook/);
+});
+
+test("a probe is remembered under either id spelling", () => {
+  rememberProbe("cse_01SPELLPROBE");
+  assert.equal(hasProbed("session_01SPELLPROBE"), true);
+});
+
+test("an empty id is never recorded as having probed", () => {
+  for (const bad of ["", "   ", null, undefined, 42]) {
+    rememberProbe(bad);
+    assert.equal(hasProbed(bad), false, String(bad));
+  }
+});
+
+test("a probe id is a key, never a path", () => {
+  // `normalizeCloudId` maps cse_ to session_ and does nothing else -- it is a
+  // spelling rule, not a validator. That is safe here because probes live in
+  // one fixed file and the id is only ever a JSON key, unlike transcripts,
+  // which build a filename and validate again on the way. Ids reaching this
+  // from outside have already been through `parseCloudSessionId`.
+  rememberProbe("../../etc/passwd");
+  assert.equal(hasProbed("../../etc/passwd"), true, "stored as an ordinary key");
+  assert.equal(
+    readdirSync(process.env.RELAY_STATE_DIR).some((name) => name.includes("passwd")),
+    false,
+    "and never as a file"
+  );
+  // The boundary is where a bad id is actually refused.
+  assert.equal(parseCloudSessionId("../../etc/passwd"), null);
+});
+
+// --- Reading the funnel's public URL ---------------------------------------
+//
+// Parsed rather than assumed. The funnel is mounted on a path someone chose,
+// and guessing the documented one would be wrong silently for anyone who chose
+// otherwise: the hook would post into a 404 and the session would look like it
+// had no hook at all.
+
+const FUNNEL_STATUS = `# Funnel on:
+#     - https://mini-pc.tail1234.ts.net
+
+https://mini-pc.tail1234.ts.net (Funnel on)
+|-- /answer  proxy http://127.0.0.1:8788/cloud/answer
+`;
+
+test("finds the public URL including the path it was mounted on", () => {
+  assert.equal(
+    parseFunnelURL(FUNNEL_STATUS, 8788),
+    "https://mini-pc.tail1234.ts.net/answer"
+  );
+});
+
+test("a funnel on a different path is read as that path", () => {
+  const other = FUNNEL_STATUS.replace("/answer", "/pocketclaude/reply");
+  assert.equal(
+    parseFunnelURL(other, 8788),
+    "https://mini-pc.tail1234.ts.net/pocketclaude/reply"
+  );
+});
+
+test("a funnel serving the whole root has no path to add", () => {
+  const root = `https://mini-pc.tail1234.ts.net (Funnel on)
+|-- /  proxy http://127.0.0.1:8788/cloud/answer
+`;
+  assert.equal(parseFunnelURL(root, 8788), "https://mini-pc.tail1234.ts.net");
+});
+
+test("a funnel pointed somewhere else is not ours", () => {
+  // Mounted, but forwarding to a different port -- so it is not this relay,
+  // and handing its URL over would send answers to a stranger.
+  assert.equal(parseFunnelURL(FUNNEL_STATUS, 9999), null);
+});
+
+test("no funnel means no URL rather than a guess", () => {
+  for (const text of ["", "No serve config", undefined, null]) {
+    assert.equal(parseFunnelURL(text, 8788), null, String(text));
+  }
 });
 
 // --- Renaming ---------------------------------------------------------------
