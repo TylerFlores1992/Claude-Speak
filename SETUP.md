@@ -122,9 +122,11 @@ estimation, and session persistence.
 |---|---|
 | Hold the big button | Record; release to send |
 | Hold it again while Claude is speaking | Interrupts and starts a new question |
-| ↺ (toolbar) | Re-read the last answer |
-| ✎ (toolbar) | New session — clears history and cost |
-| ⌨ (toolbar) | Type instead of talking |
+| ↺ (composer) | Say the last answer again |
+| ⬇ History (composer) | Bring a cloud session's own conversation over for reference |
+| Model / effort chips (composer) | Change either, per question |
+| **New chat** (sessions screen) | Start a conversation with no repository behind it |
+| Swipe a row (sessions screen) | Rename, archive, delete, or remove it from the list |
 | Cost figure (status bar) | Running estimate for this session |
 
 **AirPod stem press** (Settings → *AirPod stem press starts talking*) works when
