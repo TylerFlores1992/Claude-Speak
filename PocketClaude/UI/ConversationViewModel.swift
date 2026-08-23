@@ -819,13 +819,35 @@ final class ConversationViewModel: ObservableObject {
             speech.stop()
             streamingEntryID = nil
             streamedSoFar = ""
-            let message = (error as? LocalizedError)?.errorDescription
-                ?? error.localizedDescription
+            let message = Self.describe(error)
             errorMessage = message
             append(.init(kind: .error, text: message))
             persist()
             state = .idle
         }
+    }
+
+    /// Turns a failure into something that points at the right thing.
+    ///
+    /// "The network connection was lost" is what iOS says when it suspends the
+    /// app mid-request, which is exactly what used to happen to a question
+    /// asked from the watch with the phone locked. The network was fine. Left
+    /// unexplained it sends you to check Wi-Fi and Tailscale, neither of which
+    /// was ever the problem.
+    static func describe(_ error: Error) -> String {
+        if let urlError = error as? URLError {
+            switch urlError.code {
+            case .networkConnectionLost:
+                return "The connection dropped mid-answer. If the phone was locked, it may have been suspended before the answer arrived — ask again."
+            case .cannotConnectToHost, .cannotFindHost:
+                return "Couldn't reach the relay. Check it is running and that Tailscale is connected."
+            case .timedOut:
+                return "The relay didn't answer in time. It may still be working — check the relay window."
+            default:
+                break
+            }
+        }
+        return (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
     }
 
     private func handleRelay(_ event: RelayEvent, streaming: Bool) {
