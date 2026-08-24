@@ -1,16 +1,19 @@
 # The relay — hands-free Claude Code, no API charges
 
-PocketClaude has two backends. This is the second one.
+This is how PocketClaude answers. It used to be one of two backends; the other
+called the Anthropic API from the phone with an API key, was never actually
+used, and was removed. What is left is this.
 
-| | Direct API | **Relay (this)** |
-|---|---|---|
-| Cost per question | Billed to your Anthropic API key | **Nothing** — uses your Claude subscription |
-| What it can do | Read the repo, open PRs | Read, edit, **run your tests**, build, `git log`, `rg` |
-| Works when | Anywhere with a signal | Only while the relay machine is awake and reachable |
-| Speed | Faster (does less) | Slower (does more) |
+| | |
+|---|---|
+| Cost per question | **Nothing** — uses your Claude subscription, not an API key |
+| What it can do | Read, edit, **run your tests**, build, `git log`, `rg` |
+| Works when | Only while the relay machine is awake and reachable |
+| Speed | A real turn is 10-60 seconds; speech starts at the first sentence |
 
-The relay is a ~250-line Node script that turns one `claude -p` run into a
-stream the phone can speak sentence by sentence. It needs no dependencies.
+The relay is a dependency-free Node script that turns one `claude -p` run into
+a stream the phone can speak sentence by sentence, and couriers answers back
+from cloud sessions running on Anthropic's infrastructure.
 
 **Why this is free:** the Claude Code CLI authenticates with your claude.ai
 login, not an API key. Anthropic's docs are explicit about it — the `--bare`
@@ -337,13 +340,12 @@ run it in a `tmux` session while you try it out.
 
 In PocketClaude → **⚙ Settings**:
 
-1. **Backend** → *Relay (Claude Code)*
-2. **Relay** → address `http://<tailscale-name>:8787`
-3. **Relay token** → paste `RELAY_TOKEN` → **Save**
+1. **Relay** → address `http://<tailscale-name>:8787`
+2. **Relay token** → paste `RELAY_TOKEN` → **Save**
 
-The repository, model, and permissions all live on the server now — those
-fields disappear from Settings in relay mode, because changing them on the
-phone would have no effect.
+The repository, model, and permissions all live on the server — there are no
+fields for them in Settings, because changing them on the phone would have no
+effect.
 
 Leave **Voice out → Speak while the answer arrives** on. That's what makes the
 answer start playing after the first sentence instead of a minute later.
@@ -395,8 +397,11 @@ chatter never reaches the speech path.
 
 ## What this doesn't solve
 
-- **The machine must be awake.** Asleep or offline means no answers. Switch the
-  app back to Direct API when you're away from home and the box is off.
+- **The machine must be awake.** Asleep or offline means no answers, and there
+  is no second backend to fall back to — that was the point of removing it, but
+  it does mean a sleeping box is a silent phone. Cloud sessions are the
+  exception only in where the *work* runs: the relay still has to be up to
+  courier the answer back.
 - **Latency.** A real turn is 10–60 seconds. Streaming speech hides some of it
   by starting early, but it isn't instant.
 - **Rate limits.** Subscription limits are shared with your interactive Claude
