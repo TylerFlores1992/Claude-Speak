@@ -5,9 +5,21 @@ first time, watched a history pull land from a live cloud session, and fixed
 the environment that had been quietly breaking both. Read this first when
 picking the project back up.
 
-`main` is at `8df72f8`. The relay machine needs a `git pull` to match it: both
-`a99293d` and `8df72f8` carry relay changes, and relay changes do not ride
-TestFlight.
+The last code merge is `4964208`; this document's own merge sits on top of it.
+Four merges landed in that session, in order:
+
+| | |
+|---|---|
+| `a99293d` | A pending history pull survives a relay restart (`pulls.json`) |
+| `8df72f8` | Two swallowed errors, the alert's baked-in spacing, `install-hook.ps1` shape check |
+| `8857b78` | The hook-install recipe said one file when it needs two |
+| `4964208` | A dropped hop costs the hop, not the whole wait |
+
+**The relay machine needs a `git pull`.** Three of those four carry relay
+changes and relay changes do not ride TestFlight. It has not been done.
+
+TestFlight was shipped twice: once from `8df72f8`, then again from `4964208`
+for the hop fix.
 
 ## The setup
 
@@ -87,8 +99,16 @@ funnel host resolves, and `GET /answer` returns 401.
 **Threaded Hope** (`env_017fxpjnM2HYnGcjWUwCjRcN`) was set up the same way
 afterwards, and `Threaded_Hope` got the hook it had never had — the repository
 had no `.claude` directory at all, which is why a session there took a message
-and answered nothing. Both halves are now in place; neither has been watched
-working, so treat that lane as configured, not proven.
+and answered nothing.
+
+That lane is now **probe proven**: the phone stopped showing the missing-hook
+alert for it, and the relay only stops saying `hookMissing` once it has
+*recorded a probe from that session*. Since the hook probes before it sends
+anything, that single fact establishes three things at once — the hook is
+installed and running, `RELAY_ANSWER_TOKEN` matches, and the network policy
+lets it out. What has still not been seen is an actual **answer** arriving from
+it; the attempt that would have shown one died on the phone's own connection,
+which is what `4964208` fixes.
 
 **CampHawk** (`env_01NNXGWqS3cK1KTqhy4dH3JF`) is the one still in doubt — see
 open thread 1. The environment list exposes names but no variable *values*, so
@@ -130,8 +150,15 @@ Be honest about these rather than describing them as working:
   failing with music on, that is the suspect.
 - **`relay/install-hook.ps1`** — has still never been run, because there is no
   PowerShell in the build environment. Its verification step was strengthened
-  by reading (below), and the JavaScript half of that step *was* executed
-  against every failure shape, but the PowerShell around it has not been.
+  by reading, and the JavaScript half of that step *was* executed against every
+  failure shape, but the PowerShell around it has not been. The `[object[]]`
+  casts on the write side are untested belt; the check is the braces.
+- **The hop retry** (`4964208`) — compiled, and its three tests pass in CI
+  against a real `URLError` driven through the stub. Not seen surviving a real
+  dropped connection on a phone. The failure it repairs *was* seen on hardware,
+  twice; the repair has not been.
+- **An answer from a Threaded Hope session.** The hook probes (above), so the
+  path is established as far as the relay. Nothing has been heard back yet.
 
 ## How the cloud lane works
 
@@ -220,12 +247,28 @@ empty value substituted with `?? []`, and an empty state shown that reads as
   store started a blank conversation at launch and looked exactly like every
   past session having been lost.
 
-`try?` followed by `?? []` is the signature. The sweep has now been through the
+**And once running backwards, which is worth watching for separately.** The hop
+loop in `askCloud` treated a *recoverable* error as fatal: a dropped connection
+on one hop was thrown straight out of the wait, ending a turn that was still
+running in the cloud and whose answer was on its way to the relay's inbox. The
+code contradicted its own doc comment three lines above it. So the pattern is
+not only "an error hidden as emptiness" but "an error classified wrongly in
+either direction" -- and the fix in both cases is to say which errors are
+answers about the request and which are the transport faltering.
+
+`try?` followed by `?? []` is the signature of the first kind. A bare `try`
+inside a retry loop is the signature of the second. The sweep has now been through the
 app once; the sites checked and found *not* to be instances are
 `ConversationViewModel.swift:535`, `DashboardView.swift:174`,
 `RelayCatalog.swift:296`, `PairingLink.swift:26` and `RelayClient.swift:273`.
 
 ## Open threads
+
+0. **`git pull` on the relay machine.** Nothing else here is blocked on it, but
+   the relay is three merges behind and one of them is the `install-hook.ps1`
+   hardening you would want before installing the hook into any further
+   repository from there. Mind the restart gotcha above: only a fresh PID on
+   8788 proves a restart happened.
 
 1. **`RELAY_ANSWER_TOKEN` disagreement in the CampHawk environment**
    (`env_01NNXGWqS3cK1KTqhy4dH3JF`). It was changed mid-debugging, it was never
@@ -257,6 +300,16 @@ app once; the sites checked and found *not* to be instances are
    it completes. It should also land in the cart rather than prompting to go to
    it. This must not be fixed from Claude-Speak — a campsite-finder session is
    already editing `maybeAutoLogin`.
+6. **Watch a Threaded Hope session actually answer.** The hook probes, so the
+   lane is proven as far as the relay, but no answer has come back from it yet.
+   The next attempt is also the first real test of the hop retry, since the
+   previous one died exactly where that fix applies.
+7. **Add the third cause to the missing-hook alert.** It names two — no hook on
+   the branch, or a token mismatch — and there are three. A cloud environment
+   whose **network policy** does not allow the funnel host fails identically:
+   the hook posts, the CONNECT is refused with 403, and the hook swallows it by
+   design. That was the original Default-environment bug and it would have been
+   named by the alert if the alert knew about it.
 
 ## Working agreements
 
