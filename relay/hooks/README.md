@@ -44,14 +44,43 @@ link into **+** on the Sessions screen — nothing else.
 
 One exception, and it is the one that catches people: a session that **already
 existed** on a branch cut before the hook landed does not have it, because its
-branch predates the commit. Bring that one file across without merging anything
-else:
+branch predates the commit. Bring it across without merging anything else --
+but *how many* files depends on what that branch already has, and getting this
+wrong fails silently in the usual way.
+
+**If the repository already had the hook and you are updating it**, the wiring
+in `settings.json` is already on that branch and only the script moves:
 
 ```bash
 git fetch origin <default-branch>
 git checkout origin/<default-branch> -- .claude/hooks/answer-to-relay.mjs
 git commit -m "Update the relay hook"
 ```
+
+**If the repository is getting the hook for the first time**, that branch has
+no `.claude/settings.json` either, and the script alone does nothing at all --
+nothing is wired to run it. Take both:
+
+```bash
+git fetch origin <default-branch>
+git checkout origin/<default-branch> -- .claude/hooks/answer-to-relay.mjs .claude/settings.json
+git commit -m "Install the relay hook"
+```
+
+Check which case you are in with `git ls-tree HEAD .claude/` on the session's
+branch. An empty result is the second case. Taking only the script there leaves
+a session that looks installed and answers nothing -- the same symptom as no
+hook at all, which is the symptom this whole page exists to remove.
+
+**The hook must be on the branch the session is running, not merely pushed
+somewhere.** A pull request that adds it is not enough: until it merges, the
+default branch does not have it, and `git checkout origin/<default-branch>`
+fails with `pathspec ... did not match any file(s) known to git`. That error
+means the file is not on the ref you asked for -- most often because it is
+still sitting on an unmerged branch. Note also that `git fetch origin main`
+updates *only* `main`, so a branch pushed since your last full fetch will not
+appear in `git branch -r` and the file will look as though it does not exist
+anywhere.
 
 Several repositories can share one environment. Setting the variables once
 covers every repository in it; each repository still needs its own hook commit,
