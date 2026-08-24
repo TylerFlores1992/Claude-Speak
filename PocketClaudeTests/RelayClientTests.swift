@@ -8,6 +8,23 @@ import XCTest
 /// Swift note: `@unchecked Sendable` plus a lock, rather than an actor, so the
 /// `@Sendable` event closure can capture it without every read becoming `await`.
 /// Deliveries all happen on the main actor, so the lock is belt and braces.
+/// Counts hops from inside the stub's closure.
+///
+/// Swift note: `@unchecked Sendable` plus a lock, the same shape as
+/// `EventRecorder` below, so the `@Sendable` stub closure can capture it.
+final class HopCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    /// Returns the number of this hop, starting at 1.
+    func next() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        count += 1
+        return count
+    }
+}
+
 final class EventRecorder: @unchecked Sendable {
     private let lock = NSLock()
     private var storage: [RelayEvent] = []
@@ -384,6 +401,108 @@ final class RelayClientTests: XCTestCase {
         let json = try JSONDecoder().decode(JSONValue.self, from: body)
         XCTAssertNil(json["model"])
         XCTAssertNil(json["effort"])
+    }
+
+    func testADroppedHopCostsTheHopAndNotTheWait() async throws {
+        // The wait is made of hops precisely so a dropped connection is
+        // survivable, and the doc comment on askCloud promises "the only thing
+        // a dropped hop costs is the hop". It did not: the transport error was
+        // thrown straight out of the loop, ending the whole wait while the turn
+        // went on running in the cloud with its answer landing in an inbox
+        // nothing would collect. Seen on a real phone as "The network
+        // connection was lost", twice.
+        MockURLProtocol.reset()
+        defer { MockURLProtocol.reset() }
+
+        let hops = HopCounter()
+        MockURLProtocol.handler = { request in
+            let path = request.url?.path ?? ""
+            if path.hasSuffix("/cloud/ask") {
+                return (200, .json(#"{"answer":""}"#))
+            }
+            // First hop drops, second hop answers.
+            if hops.next() == 1 { throw URLError(.networkConnectionLost) }
+            return (200, .json(#"{"answer":"it survived the drop"}"#))
+        }
+
+        let client = RelayClient(
+            baseURL: URL(string: "http://relay.test:8788")!,
+            token: "t",
+            session: MockURLProtocol.makeSession()
+        )
+        let answer = try await client.askCloud(
+            sessionID: "session_01DROP",
+            text: "hello",
+            timeout: 30,
+            dropBackoff: 0
+        )
+        XCTAssertEqual(answer, "it survived the drop")
+    }
+
+    func testARelayRefusalDuringAHopIsNotRetried() async throws {
+        // Only the transport is worth retrying. A refusal is an answer about
+        // the request, and asking again is told the same thing more slowly.
+        MockURLProtocol.reset()
+        defer { MockURLProtocol.reset() }
+
+        MockURLProtocol.handler = { request in
+            let path = request.url?.path ?? ""
+            if path.hasSuffix("/cloud/ask") {
+                return (200, .json(#"{"answer":""}"#))
+            }
+            return (401, .json(#"{"error":"bad token"}"#))
+        }
+
+        let client = RelayClient(
+            baseURL: URL(string: "http://relay.test:8788")!,
+            token: "t",
+            session: MockURLProtocol.makeSession()
+        )
+        do {
+            _ = try await client.askCloud(
+                sessionID: "session_01REFUSED",
+                text: "hello",
+                timeout: 30,
+                dropBackoff: 0
+            )
+            XCTFail("a refusal should end the wait")
+        } catch {
+            let text = (error as? LocalizedError)?.errorDescription ?? "\(error)"
+            XCTAssertTrue(text.contains("bad token"), "got: \(text)")
+        }
+    }
+
+    func testEnoughDropsInARowStillGivesUp() async throws {
+        // A relay that has genuinely gone away should be reported, not hidden
+        // behind a quarter of an hour of silent retrying.
+        MockURLProtocol.reset()
+        defer { MockURLProtocol.reset() }
+
+        MockURLProtocol.handler = { request in
+            if request.url?.path.hasSuffix("/cloud/ask") == true {
+                return (200, .json(#"{"answer":""}"#))
+            }
+            throw URLError(.networkConnectionLost)
+        }
+
+        let client = RelayClient(
+            baseURL: URL(string: "http://relay.test:8788")!,
+            token: "t",
+            session: MockURLProtocol.makeSession()
+        )
+        do {
+            _ = try await client.askCloud(
+                sessionID: "session_01GONE",
+                text: "hello",
+                timeout: 30,
+                dropBackoff: 0
+            )
+            XCTFail("an unreachable relay should be reported")
+        } catch {
+            let text = (error as? LocalizedError)?.errorDescription ?? "\(error)"
+            XCTAssertTrue(text.contains("times running"), "got: \(text)")
+            XCTAssertTrue(text.contains("ask again"), "and says what to do: \(text)")
+        }
     }
 
     func testMissingHookAdviceReadsAsOneParagraph() {

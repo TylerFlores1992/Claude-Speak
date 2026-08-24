@@ -244,6 +244,21 @@ dropped hop costs the hop and nothing else.
 
 Hops are clamped to ninety seconds so a stuck client cannot pin a socket open.
 
+For a dropped hop to cost only the hop, the phone has to treat it that way, and
+for a while it did not: a transport failure ended the whole wait, and the turn
+carried on in the cloud with its answer landing in an inbox nothing would
+collect. The app now retries a dropped hop with a doubling backoff and gives up
+after five in a row -- enough to ride out a network changing underneath the
+phone, few enough that a relay which has genuinely gone away is reported rather
+than hidden behind a quarter of an hour of silent retrying. Only the transport
+is retried: a refusal, a bad token or a session with no hook is an answer about
+the request, and asking again is told the same thing more slowly.
+
+The request that *starts* the turn is deliberately not retried. It is what
+queues the message into the cloud session, and a connection dropping on the way
+back leaves no way to tell whether it was queued -- so retrying risks saying the
+same thing to the session twice.
+
 An answer nobody ever collects is discarded when the next question arrives:
 the inbox is drained at the start of every wait, so leaving it there would hand
 the previous turn's answer to a question it has never seen.
