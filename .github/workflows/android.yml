@@ -1,0 +1,77 @@
+name: Android
+
+# The Android client, phone and watch. A separate workflow from ios.yml rather
+# than a job inside it, for two reasons:
+#
+#   Cost. This runs on ubuntu-latest. The iOS build needs macOS, which bills at
+#   a 10x multiplier and once exhausted a month of Actions minutes in a day.
+#   Keeping them apart means Android work never drags the expensive runner in.
+#
+#   Blast radius. The iOS lane ships to TestFlight and is not to be disturbed by
+#   work on this one.
+#
+# No `paths` filter, matching ios.yml and for the same reason: a filter that can
+# silently skip a run is worse than a build that costs a few free minutes. A
+# push that lands with no run at all sits unvalidated until someone notices.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Deliberately NOT the same concurrency group as ios.yml. On a push to main both
+# would otherwise be `ios-refs/heads/main`, and `cancel-in-progress` would let an
+# Android run kill an in-flight TestFlight upload -- which is exactly how one was
+# lost, six seconds before it finished.
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build phone and watch
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up the Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('android/gradle/libs.versions.toml', 'android/**/*.gradle.kts') }}
+          restore-keys: gradle-${{ runner.os }}-
+
+      - name: Unit tests
+        working-directory: android
+        run: ./gradlew --no-daemon test
+
+      - name: Assemble phone
+        working-directory: android
+        run: ./gradlew --no-daemon :app:assembleDebug
+
+      - name: Assemble watch
+        working-directory: android
+        run: ./gradlew --no-daemon :wear:assembleDebug
+
+      - name: Upload APKs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: apks
+          path: |
+            android/app/build/outputs/apk/**/*.apk
+            android/wear/build/outputs/apk/**/*.apk
+          if-no-files-found: warn
