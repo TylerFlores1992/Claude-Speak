@@ -6,10 +6,14 @@
     <!-- The watch does NOT talk to the relay. Tailscale has no Wear OS client
          (tailscale/tailscale#3972, open since 2022 with no assignee and no
          linked PRs), so the tailnet address is unreachable from here, and the
-         funnel deliberately publishes only /answer -- mounting /ask would put
+         funnel deliberately publishes only /answer. Mounting /ask would put
          Claude Code on the public internet. So the watch speaks to the phone
          over the Data Layer and the phone does the network. INTERNET is not
-         requested, because nothing here would be allowed to use it. -->
+         requested, because nothing here would be allowed to use it.
+
+         Note for anyone editing this comment: XML forbids a double hyphen
+         inside a comment, and this project writes prose with one as an ASCII
+         dash. That combination is what made the first CI run red. -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <application
