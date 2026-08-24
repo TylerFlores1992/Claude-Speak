@@ -76,7 +76,27 @@ final class ConversationViewModel: ObservableObject {
         self.recognizer = recognizer ?? SpeechRecognizerService()
         self.speech = speech ?? SpeechService()
         self.store = store
-        self.session = store.loadMostRecent() ?? Session(model: settings.model.rawValue)
+        // A store that cannot be read is not a store with nothing in it. Both
+        // used to start a blank conversation, so an unreadable directory looked
+        // exactly like every past session having vanished. Starting fresh is
+        // still the only thing to do here — but say why.
+        //
+        // Swift note: resolved into locals and assigned once, rather than
+        // assigning `session` from inside both branches. `session` is a
+        // `@Published` property with no default, so every path through `init`
+        // has to initialise it exactly once before `self` is usable.
+        var restored: Session?
+        var restoreFailure: String?
+        do {
+            restored = try store.loadMostRecent()
+        } catch {
+            let reason = (error as? LocalizedError)?.errorDescription
+                ?? error.localizedDescription
+            restoreFailure = "Couldn't read your saved conversations, so this "
+                + "is a new one. They are still on the device — \(reason)"
+        }
+        self.session = restored ?? Session(model: settings.model.rawValue)
+        self.errorMessage = restoreFailure
     }
 
     // MARK: - Permissions

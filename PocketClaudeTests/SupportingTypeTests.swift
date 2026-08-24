@@ -130,8 +130,29 @@ final class SessionStoreTests: XCTestCase {
         XCTAssertEqual(loaded.usage.inputTokens, 10)
     }
 
-    func testLoadReturnsNilWhenNothingSaved() {
-        XCTAssertNil(SessionStore(directory: directory).loadMostRecent())
+    func testLoadReturnsNilWhenNothingSaved() throws {
+        XCTAssertNil(try SessionStore(directory: directory).loadMostRecent())
+    }
+
+    func testAnUnreadableStoreThrowsRatherThanLookingEmpty() {
+        // The bug: contentsOfDirectory was `try?` and folded to [], so a store
+        // that could not be read was indistinguishable from a store with
+        // nothing in it — and the app quietly opened a brand-new conversation,
+        // which reads like every past session had been lost.
+        //
+        // A plain file where the sessions directory should be is the cheapest
+        // way to make the read genuinely fail: init's createDirectory cannot
+        // replace it, and listing a non-directory errors.
+        let blocked = directory.appendingPathComponent("blocked", isDirectory: true)
+        try? FileManager.default.createDirectory(at: blocked, withIntermediateDirectories: true)
+        FileManager.default.createFile(
+            atPath: blocked.appendingPathComponent("sessions").path,
+            contents: Data("not a directory".utf8)
+        )
+
+        let store = SessionStore(directory: blocked)
+        XCTAssertThrowsError(try store.summaries(), "an unreadable store is not an empty one")
+        XCTAssertThrowsError(try store.loadMostRecent())
     }
 
     func testDeleteRemovesOnlyThatSession() {
@@ -147,7 +168,7 @@ final class SessionStoreTests: XCTestCase {
         XCTAssertNil(store.load(id: drop.id))
     }
 
-    func testSessionsAccumulateRatherThanOverwrite() {
+    func testSessionsAccumulateRatherThanOverwrite() throws {
         // The whole point of the rewrite: starting a new conversation must not
         // destroy the previous one.
         let store = SessionStore(directory: directory)
@@ -155,23 +176,23 @@ final class SessionStoreTests: XCTestCase {
         store.save(makeSession(question: "second"))
         store.save(makeSession(question: "third"))
 
-        XCTAssertEqual(store.summaries().count, 3)
+        XCTAssertEqual(try store.summaries().count, 3)
     }
 
-    func testEmptySessionsAreNotSaved() {
+    func testEmptySessionsAreNotSaved() throws {
         let store = SessionStore(directory: directory)
         store.save(Session())
-        XCTAssertTrue(store.summaries().isEmpty)
+        XCTAssertTrue(try store.summaries().isEmpty)
     }
 
-    func testSummariesAreNewestFirst() {
+    func testSummariesAreNewestFirst() throws {
         // Explicit start dates: two saves can land in the same millisecond, so
         // `updatedAt` alone would leave the order genuinely undefined.
         let store = SessionStore(directory: directory)
         store.save(makeSession(question: "older", startedAt: Date(timeIntervalSince1970: 1_000)))
         store.save(makeSession(question: "newer", startedAt: Date(timeIntervalSince1970: 2_000)))
 
-        let titles = store.summaries().map(\.title)
+        let titles = try store.summaries().map(\.title)
         XCTAssertEqual(titles.first, "newer")
         XCTAssertEqual(titles.last, "older")
     }
@@ -231,8 +252,8 @@ final class SessionStoreTests: XCTestCase {
 
         let store = SessionStore(directory: directory)
 
-        XCTAssertEqual(store.summaries().count, 1)
-        XCTAssertEqual(store.summaries().first?.title, "from the old build")
+        XCTAssertEqual(try store.summaries().count, 1)
+        XCTAssertEqual(try store.summaries().first?.title, "from the old build")
         XCTAssertFalse(
             FileManager.default.fileExists(atPath: legacy.path),
             "the legacy file should be removed once migrated"

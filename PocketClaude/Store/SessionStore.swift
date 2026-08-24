@@ -140,8 +140,12 @@ struct SessionStore {
 
     /// Newest first. Decodes every session, so call it when the list is opened
     /// rather than on launch.
-    func summaries() -> [SessionSummary] {
-        allSessions()
+    ///
+    /// Throws rather than returning `[]` when the directory itself cannot be
+    /// read: an unreadable store and an empty one are different things, and
+    /// only one of them should be drawn as "nothing here".
+    func summaries() throws -> [SessionSummary] {
+        try allSessions()
             .map(SessionSummary.init)
             .sorted(by: SessionSummary.newestFirst)
     }
@@ -151,8 +155,13 @@ struct SessionStore {
     }
 
     /// The conversation to reopen on launch.
-    func loadMostRecent() -> Session? {
-        allSessions().max { lhs, rhs in
+    ///
+    /// `nil` means there is nothing saved. A store that could not be read
+    /// throws instead, because the two used to be indistinguishable here and
+    /// the second one silently opened a brand-new conversation — which reads
+    /// like every past session was gone.
+    func loadMostRecent() throws -> Session? {
+        try allSessions().max { lhs, rhs in
             (lhs.updatedAt ?? lhs.startedAt) < (rhs.updatedAt ?? rhs.startedAt)
         }
     }
@@ -180,8 +189,8 @@ struct SessionStore {
 
     /// Removes every saved session. Only used by tests and a deliberate
     /// "delete everything" action — the toolbar's new-session button archives.
-    func deleteAll() {
-        for url in files() {
+    func deleteAll() throws {
+        for url in try files() {
             try? FileManager.default.removeItem(at: url)
         }
     }
@@ -192,16 +201,22 @@ struct SessionStore {
         directory.appendingPathComponent("\(id.uuidString).json")
     }
 
-    private func files() -> [URL] {
-        let contents = try? FileManager.default.contentsOfDirectory(
-            at: directory,
-            includingPropertiesForKeys: nil
-        )
-        return (contents ?? []).filter { $0.pathExtension == "json" }
+    /// Swallowing this was the bug: a directory that could not be read came
+    /// back as an empty list, indistinguishable from a directory with nothing
+    /// in it. The error is the useful part — it names the reason — so it goes
+    /// up rather than being replaced by `[]`.
+    private func files() throws -> [URL] {
+        try FileManager.default
+            .contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension == "json" }
     }
 
-    private func allSessions() -> [Session] {
-        files().compactMap(decode(at:))
+    /// A single session that will not decode is skipped, deliberately: one
+    /// corrupt file should cost you that conversation, not all of them. That
+    /// is a different case from the directory itself being unreadable, which
+    /// costs everything and therefore throws.
+    private func allSessions() throws -> [Session] {
+        try files().compactMap(decode(at:))
     }
 
     private func decode(at url: URL) -> Session? {

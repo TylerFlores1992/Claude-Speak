@@ -385,4 +385,17 @@ final class RelayClientTests: XCTestCase {
         XCTAssertNil(json["model"])
         XCTAssertNil(json["effort"])
     }
+
+    func testMissingHookAdviceReadsAsOneParagraph() {
+        // It was written as a multi-line literal whose source wrapping baked
+        // the indentation in as literal spaces, so the phone showed a run of
+        // blanks mid-sentence -- in the error people see exactly when they are
+        // already stuck. Line continuations keep the source readable without
+        // putting the wrapping into what anyone reads.
+        let advice = RelayClient.missingHookAdvice
+        XCTAssertFalse(advice.contains("  "), "no run of spaces reaches the screen")
+        XCTAssertFalse(advice.contains("\n"), "one flowing paragraph, not wrapped lines")
+        XCTAssertTrue(advice.contains("answer you. Either"))
+        XCTAssertTrue(advice.contains("RELAY_ANSWER_TOKEN doesn't match"))
+    }
 }
