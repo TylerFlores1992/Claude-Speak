@@ -1,10 +1,12 @@
 # Where this stands
 
-Updated after the session that proved the cloud round trip on hardware, built
-history pulling, and cut the app back to one lane. Read this first when picking
-the project back up.
+Updated after the session that got the cloud lane working end to end for the
+first time, watched a history pull land from a live cloud session, and fixed
+the environment that had been quietly breaking both. Read this first when
+picking the project back up.
 
-App and relay are both on `fb8409c`.
+`main` is at `a99293d`. The relay machine needs a `git pull` to match it —
+`a99293d` is relay-only and does not ride TestFlight.
 
 ## The setup
 
@@ -14,37 +16,96 @@ App and relay are both on `fb8409c`.
 - **Relay**: `C:\code\Claude-Speak` on a Windows mini PC, started by the
   "PocketClaude relay" scheduled task at logon (`relay/install-autostart.ps1`),
   serving `C:\code\campsite-finder` (the CampHawk repo, actual name
-  `campsite-finder`). Reached over Tailscale at `100.119.76.63:8788`.
+  `campsite-finder`). Reached over Tailscale at `100.119.76.63:8788`, and from
+  the cloud through Tailscale Funnel at
+  `https://desktop-mdc5q6e.tailef3c66.ts.net/answer`.
 - **Cloud sessions**: created in the Claude app, added here by link. The Stop
-  hook that answers them is committed to `campsite-finder` on `master`
-  (`.claude/hooks/answer-to-relay.mjs`, wired in `.claude/settings.json`).
+  hook that answers them is committed to `campsite-finder` on `master` and to
+  this repository in `.claude/`.
 - **Watch**: Apple Watch SE3, paired, working.
-- **Branch**: all work on `claude/pocketclaude-voice-agent-oeae9p`, squash-merged
-  to `main` via PR, then the branch is reset onto `main`.
+- **Branch**: all work on the session's assigned `claude/…` branch,
+  squash-merged to `main` via PR, then the branch is reset onto `main`.
 
 ## What works, confirmed on hardware
 
 - Voice question → relay → Claude Code → spoken answer, phone pocketed.
 - **The watch, with the phone locked.** Tap Ask, talk, tap Send. The watch
   records audio, transfers the file, the phone transcribes it and answers.
-- **The cloud round trip.** A Stop hook inside a cloud VM reached the relay
-  through Tailscale Funnel and delivered a finished turn
-  (`answer: session_01R9kxxy... 233 chars (buffered)`); a message queued into a
-  cloud session; both ends showed the same conversation.
+- **The Claude-Speak cloud lane, end to end.** A cloud session on *this*
+  repository answered the phone. Previously only `campsite-finder` had ever
+  completed the round trip.
+- **History, against a live cloud session over the Funnel.** This was the one
+  feature built end to end and never seen running. It has now been seen. It is
+  no longer an open thread.
 - Sessions dashboard: cloud sessions first, then the relay machine's own,
   grouped by repository. Swipe to rename, archive, delete, or remove.
 - Markdown rendering, model/effort chips, typed input, one-tap pairing.
 - Relay update from the phone, when running under `run.ps1`.
 
+## Mechanism, learned the hard way
+
+This section is worth more than the fixes it came from. Two separate cloud
+sessions got the first item wrong, in opposite directions, and one of them
+recommended abandoning the architecture over it.
+
+- **Tailscale Funnel hostnames are public, not tailnet-only.** A cloud
+  container resolves them: `getent` returns `2607:f740:0:3f::3cc` from inside a
+  session that is not a tailnet member. The *tailnet* address
+  (`100.119.76.63`) is member-only; the funnel host is not. Do not re-derive
+  this, and do not accept "MagicDNS only resolves for tailnet members" as a
+  reason the design cannot work.
+- **Environment and network-policy changes apply only to sessions started
+  afterward.** A running session keeps the values it was born with for its
+  whole life. Any environment change must be tested in a *new* session; the
+  current one can never confirm it, however many times you retry.
+- **Reading the reachability test.** `401` from a bare `GET` on `/answer` is a
+  **pass** — the tunnel opened and the relay answered. `000` with `CONNECT
+  tunnel failed, response 403` is the egress block.
+- **A history pull rides the next turn that finishes *in the session*,** from
+  any surface — not the next thing you say in PocketClaude. One landed via an
+  unrelated command run in the Claude app. Nothing signals when it arrives; the
+  app simply has it next time you open the screen. This is by design and is not
+  a bug, and it is the explanation for a pull that looks lost.
+
+## Environment configuration that is known good
+
+The **Default** cloud environment (`env_016SUUYfPcrmTXTeKNnxqQQW`):
+
+| | |
+|---|---|
+| `RELAY_ANSWER_URL` | `https://desktop-mdc5q6e.tailef3c66.ts.net/answer` |
+| `RELAY_HOOK_DEBUG` | `1` |
+| `RELAY_ANSWER_TOKEN` | matches the relay — proven by a delivered answer, not by reading it |
+| Network access | **Custom**, allowed domain `desktop-mdc5q6e.tailef3c66.ts.net`, with *"Also include default list of common package managers"* ticked |
+
+A literal trailing `+` in `RELAY_ANSWER_URL` was the original bug. It is gone.
+
+Re-confirmed from a session started after the fix: the URL is correct, the
+funnel host resolves, and `GET /answer` returns 401.
+
+## Restarting the relay
+
+`Start-ScheduledTask` can report `LastTaskResult 0` while the **old** process
+still holds port 8788. The new instance cannot bind, exits silently, and the
+old one keeps serving — so the restart appears to succeed and changes nothing.
+Only a fresh PID on the port proves it:
+
+```powershell
+Stop-ScheduledTask -TaskName "PocketClaude relay"
+Get-NetTCPConnection -LocalPort 8788 -State Listen |
+  ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }
+Start-Sleep -Seconds 2
+Start-ScheduledTask -TaskName "PocketClaude relay"
+Start-Sleep -Seconds 5
+Get-NetTCPConnection -LocalPort 8788 -State Listen |
+  ForEach-Object { Get-Process -Id $_.OwningProcess } |
+  Select-Object Id, StartTime
+```
+
 ## What is built but never verified against reality
 
 Be honest about these rather than describing them as working:
 
-- **History** — the pull is verified end to end against a *local* relay and a
-  real transcript file (4 messages pulled, flag cleared, no duplicates, a
-  `tool_use` block containing `echo secret` correctly excluded). It has never
-  been watched working against a live cloud session over the Funnel. Same
-  mechanism as the answers that do work, so it should — but nobody has seen it.
 - **Rename** — both endpoints were exercised against a running relay before the
   UI was wired. The swipe action itself has not been tapped.
 - **New chat** — starts on the relay's scratch workspace. Not tried.
@@ -55,6 +116,10 @@ Be honest about these rather than describing them as working:
 - **Keep music playing** — ducking adds a route negotiation at microphone
   acquisition, which is what caused early locked-screen crashes. If takes start
   failing with music on, that is the suspect.
+- **`relay/install-hook.ps1`** — has still never been run, because there is no
+  PowerShell in the build environment. Its verification step was strengthened
+  by reading (below), and the JavaScript half of that step *was* executed
+  against every failure shape, but the PowerShell around it has not been.
 
 ## How the cloud lane works
 
@@ -66,17 +131,16 @@ app, and the work runs on Anthropic's infrastructure.
 - **Answering**: the hook fires at the end of every turn, probes the relay with
   the session id and no text, and sends the answer only if the relay says it
   asked. A turn nobody here asked about never leaves the VM.
-- **History**: `POST /cloud/pull` sets a flag; the probe reports it as
-  `wantHistory`; the hook reads its own `transcript_path` — the conversation on
-  disk beside it — keeps only plain user and assistant text, and posts it back
-  on the same path. No message is sent and no turn is started, so nothing about
-  a pull appears in the conversation on claude.ai.
-
-The Stop hook payload was captured live to confirm this: it carries
-`session_id`, `transcript_path`, `cwd`, `last_assistant_message`, and more.
+- **History**: `POST /cloud/pull` sets a flag, now persisted in
+  `RELAY_STATE_DIR/pulls.json`; the probe reports it as `wantHistory`; the hook
+  reads its own `transcript_path` — the conversation on disk beside it — keeps
+  only plain user and assistant text, and posts it back on the same path. No
+  message is sent and no turn is started, so nothing about a pull appears in the
+  conversation on claude.ai.
 
 **A cloud session needs the hook on the branch it has checked out.** New
-sessions branched from `master` get it. An older session needs one file:
+sessions branched from the default branch get it. An older session needs one
+file:
 `git fetch origin master && git checkout origin/master -- .claude/hooks/answer-to-relay.mjs`.
 
 ## Known dead ends, with the reason
@@ -89,9 +153,8 @@ sessions branched from `master` get it. An older session needs one file:
   friends are injected into a cloud session by its harness; `claude mcp list` on
   a plain CLI shows no servers.
 - **Creating a cloud session from the relay.** `claude --cloud "<task>"` refuses
-  without a terminal: "Non-interactive invocations run locally and would
-  silently ignore --cloud." Allocating a pseudo-tty needs a native module this
-  project has no dependencies for. Sessions are created in the Claude app.
+  without a terminal. Allocating a pseudo-tty needs a native module this project
+  has no dependencies for. Sessions are created in the Claude app.
 
 Do not re-attempt these without new information:
 
@@ -106,73 +169,78 @@ Do not re-attempt these without new information:
   a locked phone cannot acquire the microphone. Three constraints, no solution.
 - **Foregrounding the phone app from the watch.** No API. The fix was to make
   the phone answer from the background instead, which it now does.
-- **Editing cloud environments.** claude.ai UI only; `/remote-env` picks a
-  default and is interactive. The repo-committed route — `CLAUDE.md`,
-  `.claude/settings.json` SessionStart hooks, `.claude/rules|skills|agents` —
-  is the portable alternative and works locally *and* in the cloud.
-
-## Removed, and why
-
-**Teleport and everything reachable only through it**: the "Bring it here" flow,
-the Remote Control toggle, cloud-session refresh (which re-teleported), and
-starting a cloud session from the phone. Relay routes `/teleport`,
-`/remote-control`, `/remote-control/stop`, `/cloud/refresh` and `/cloud/start`
-went with them.
-
-**The direct-API lane.** The app had two backends: the relay, and calling
-Anthropic from the phone with an API key and a GitHub token. Only the relay was
-ever used, so the second went — `AnthropicClient`, `AgentRunner`,
-`ToolExecutor`, `ToolCatalog`, `GitHubClient`, the system prompt, and the write
-confirmation flow that only its tool calls could trigger. Settings lost the
-backend picker and the credentials, repository and model sections. 3,498 lines.
-
-The Anthropic key and GitHub token are kept as **retired Keychain cases and
-deleted at launch**: removing a feature does not remove what it stored, and
-dropping the cases would have stranded two real secrets on the device with
-nothing able to name them.
-
-**From the UI**: the composer's `claude.ai` chip, the conversation's new-session
-toolbar icon, the dashboard's back-to-current-conversation shortcut, the `+`
-actions menu (replaced by a one-tap repeat button), the past-conversations
-sheet, and the workspace picker behind "New session" — which is now "New chat"
-and starts one directly.
-
-This reverses part of the original brief, which asked for tests on the GitHub
-API client and the tool-call layer: that code is gone, so those tests are too.
-`ResponseParser` and its tests survive — speech and the Siri intent use it.
+- **Editing cloud environments programmatically.** claude.ai UI only. The API
+  lists environments but exposes no variable values, so a token mismatch cannot
+  be diagnosed by reading — only by testing from a session started afterward.
+  The repo-committed route — `CLAUDE.md`, `.claude/settings.json` SessionStart
+  hooks, `.claude/rules|skills|agents` — is the portable alternative and works
+  locally *and* in the cloud.
 
 ## The bug pattern worth remembering
 
-Three bugs in one evening had the same shape: an error was swallowed with
-`try?`, an empty value substituted with `?? []`, and an empty state shown that
-read as "nothing here" instead of "something failed".
+Bugs in this project keep having one shape: an error swallowed with `try?`, an
+empty value substituted with `?? []`, and an empty state shown that reads as
+"nothing here" instead of "something failed".
 
 - A session added by link never appeared, because the list was gated on the
-  *local* sessions found on the relay — with none there, cloud sessions were
-  never drawn.
+  *local* sessions found on the relay.
 - The transcript request could never succeed: `getJSON` folded `"path?query"`
-  into `URLComponents.path`, which percent-encodes what it is given, so `?`
-  became `%3F` and the relay answered 400. The **History** button, gated on that
-  request, was therefore correctly hidden every time.
-- A momentary relay failure wiped the cloud list, making a hiccup on the way
-  back to the screen look identical to a session that failed to save.
+  into `URLComponents.path`, so `?` became `%3F` and the relay answered 400.
+- A momentary relay failure wiped the cloud list, making a hiccup look identical
+  to a session that failed to save.
+- A pull armed before a relay restart was dropped silently, and the phone went
+  on showing **Pulling** for a note nothing was left holding.
+- `getJSON` again: a 200 whose body would not parse became `{}`, so the
+  dashboard said "No sessions yet" about a relay that had answered.
+- `SessionStore.files()`: a failed directory read became `[]`, so an unreadable
+  store started a blank conversation at launch and looked exactly like every
+  past session having been lost.
 
-More instances of the pattern remain. `try?` followed by `?? []` is the
-signature.
+`try?` followed by `?? []` is the signature. The sweep has now been through the
+app once; the sites checked and found *not* to be instances are
+`ConversationViewModel.swift:535`, `DashboardView.swift:174`,
+`RelayCatalog.swift:296`, `PairingLink.swift:26` and `RelayClient.swift:273`.
 
 ## Open threads
 
-1. **Watch History work on real infrastructure.** The one feature built end to
-   end and never seen running. Tap it in a cloud session, say anything.
-2. **Sweep for swallowed errors** — see the pattern above.
+1. **`RELAY_ANSWER_TOKEN` disagreement in the CampHawk environment**
+   (`env_01NNXGWqS3cK1KTqhy4dH3JF`). It was changed mid-debugging, it was never
+   established what it was changed to, and the relay itself was not touched. If
+   the two now disagree, that lane cannot answer, and its sessions show the
+   "never reported back to the relay" alert — which the relay cannot distinguish
+   from a missing hook, by design. There are usually live CampHawk sessions.
+   Recovery: the relay is the source of truth; phone Settings → Cloud session
+   setup copies its real token to the clipboard; paste into **both**
+   environments; verify with the authenticated POST in `relay/hooks/README.md`
+   under "Check it".
+2. **Rotate `RELAY_ANSWER_TOKEN`.** It was exposed in plaintext in a screenshot
+   in an earlier session. Procedure is `relay/hooks/README.md` step 2 — copy to
+   the clipboard rather than echoing it. Rotation means updating both
+   environments *and* restarting the relay, and it breaks the campsite-finder
+   lane until its environment is updated, so time it when CampHawk is quiet.
+   Thread 1 and this thread touch the same value; doing them as one operation
+   costs one restart instead of two.
 3. **Scaffold repo config for campsite-finder** — a `.claude/settings.json`
    SessionStart hook plus `scripts/setup.sh`, so setup travels with the repo
-   into both cloud sessions and relay sessions. Offered, not yet started.
+   into both cloud sessions and relay sessions. Cannot be done from a
+   Claude-Speak session: repository scope does not include campsite-finder.
+4. **Run `relay/install-hook.ps1` on a scratch repository.** Never executed. The
+   specific thing to watch for is `hooks.Stop` serialising as an object rather
+   than an array on PowerShell 5.1, which the script's own check now catches and
+   names.
+5. **A CampHawk auto-login report needs delivering.** Auto-login lands on the
+   recreation.gov calendar and stalls until login is tapped by hand; after that
+   it completes. It should also land in the cart rather than prompting to go to
+   it. This must not be fixed from Claude-Speak — a campsite-finder session is
+   already editing `maybeAutoLogin`.
 
 ## Working agreements
 
-- Every change: CI on the branch, then squash-merge PR, then ship to TestFlight
-  from `main`, then reset the branch onto `main`.
+- Every change: CI on the branch via PR, then squash-merge, then ship to
+  TestFlight from `main`, then reset the branch onto `main`.
+- A feature-branch push runs **no CI**. The workflow triggers on
+  `pull_request`, `push: [main]` and `workflow_dispatch` only, so a branch with
+  no pull request has never been tested.
 - Merge to `main` *before* asking for a `git pull` on the mini PC. Relay-only
   changes still need that pull; they do not ride TestFlight.
 - Say plainly what is unverified. Several fixes here were shipped twice because

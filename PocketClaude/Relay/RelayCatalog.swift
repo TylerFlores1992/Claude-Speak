@@ -390,7 +390,10 @@ extension RelayClient {
     /// that records a session as having reported in — and guessing between them
     /// would send someone to check the wrong thing.
     static let missingHookAdvice = """
-        This session has never reported back to the relay, so nothing is installed to answer you.         Either its repository has no Stop hook on the branch it is running, or its RELAY_ANSWER_TOKEN         doesn't match the relay's. Settings has both values ready to copy.
+        This session has never reported back to the relay, so nothing is \
+        installed to answer you. Either its repository has no Stop hook on \
+        the branch it is running, or its RELAY_ANSWER_TOKEN doesn't match \
+        the relay's. Settings has both values ready to copy.
         """
 
     /// Collects an answer that arrived while nothing was listening.
@@ -486,6 +489,21 @@ extension RelayClient {
                 body: String(decoding: data.prefix(300), as: UTF8.self)
             )
         }
-        return (try? JSONDecoder().decode(JSONValue.self, from: data)) ?? .object([:])
+        do {
+            return try JSONDecoder().decode(JSONValue.self, from: data)
+        } catch {
+            // A 200 whose body will not parse is a broken relay, not an empty
+            // one. Folded to `{}`, sessions() and cloudSessions() returned []
+            // and the dashboard read "No sessions yet" — the shape of bug this
+            // project keeps finding: an error swallowed, an empty value put in
+            // its place, and an empty state that says "nothing here" when it
+            // means "something failed".
+            let body = String(decoding: data.prefix(200), as: UTF8.self)
+            throw RelayError.relay(
+                body.isEmpty
+                    ? "The relay answered \(path) with an empty body."
+                    : "The relay answered \(path) with something this app could not read — \(body)"
+            )
+        }
     }
 }

@@ -95,7 +95,7 @@ if ($settings.PSObject.Properties.Name -notcontains "hooks") {
     $settings | Add-Member -MemberType NoteProperty -Name hooks -Value ([PSCustomObject]@{})
 }
 if ($settings.hooks.PSObject.Properties.Name -notcontains "Stop") {
-    $settings.hooks | Add-Member -MemberType NoteProperty -Name Stop -Value @()
+    $settings.hooks | Add-Member -MemberType NoteProperty -Name Stop -Value ([object[]]@())
 }
 
 $existing = @($settings.hooks.Stop)
@@ -110,9 +110,15 @@ if ($already) {
     Write-Host "Kept   .claude\settings.json (the hook was already wired)"
 } else {
     $entry = [PSCustomObject]@{
-        hooks = @([PSCustomObject]@{ type = "command"; command = $command })
+        hooks = [object[]]@([PSCustomObject]@{ type = "command"; command = $command })
     }
-    $settings.hooks.Stop = @($existing + $entry)
+    # Explicitly [object[]], not just @(...): Claude Code requires Stop to be an
+    # array, and on Windows PowerShell 5.1 a one-element array can lose its
+    # array-ness on the way through property binding and ConvertTo-Json. That is
+    # the likely shape on a repository with no prior Stop hooks -- which is most
+    # of them. The cast is belt; the check below is braces, and is what actually
+    # proves the file on disk is right.
+    $settings.hooks.Stop = [object[]]@($existing + $entry)
     Write-Host "Wired  .claude\settings.json"
 }
 
@@ -123,8 +129,32 @@ $json = $settings | ConvertTo-Json -Depth 20
 
 # --- Prove it, rather than assume it ----------------------------------------
 
-$check = & node -e "const b=require('fs').readFileSync(process.argv[1]); if (b[0]===0xEF) { console.log('BOM'); process.exit(1) } const j=JSON.parse(b.toString('utf8')); const wired=JSON.stringify(j.hooks && j.hooks.Stop || []).includes('answer-to-relay'); console.log(wired ? 'ok' : 'unwired'); process.exit(wired ? 0 : 1)" $settingsPath 2>&1
-if ($LASTEXITCODE -ne 0) { Fail "settings.json did not come out right ($check)." }
+# Shape, not just substring. The old check asked whether the serialised Stop
+# value contained "answer-to-relay", which is true of an object just as much as
+# of the array Claude Code requires -- so the one failure this script is most
+# likely to produce was the one failure it could not see.
+$verify = @'
+const b = require('fs').readFileSync(process.argv[1]);
+if (b[0] === 0xEF) { console.log('BOM'); process.exit(1) }
+const j = JSON.parse(b.toString('utf8'));
+const stop = j.hooks && j.hooks.Stop;
+if (!Array.isArray(stop)) {
+  console.log('hooks.Stop is ' + JSON.stringify(stop) + ', which is not an array');
+  process.exit(1)
+}
+const wired = stop.some(function (e) {
+  return e && Array.isArray(e.hooks) && e.hooks.some(function (h) {
+    return h && typeof h.command === 'string' && h.command.indexOf('answer-to-relay') !== -1
+  })
+});
+console.log(wired ? 'ok' : 'unwired');
+process.exit(wired ? 0 : 1)
+'@
+
+$check = & node -e $verify $settingsPath 2>&1
+if ($LASTEXITCODE -ne 0) {
+    Fail "settings.json did not come out right ($check). If it says Stop is not an array, ConvertTo-Json unwrapped the single entry: open .claude\settings.json and wrap the Stop value in [ ] by hand, then run this again."
+}
 
 & node --check $destination
 if ($LASTEXITCODE -ne 0) { Fail "The hook itself does not parse." }

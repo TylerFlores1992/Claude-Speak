@@ -38,7 +38,7 @@ concurrency:
 
 jobs:
   # Ubuntu, not macOS: the relay is a Node script and has no business costing
-  # 10x. These 19 tests cover the SSE framing and the stream-json interpreter —
+  # 10x. These tests cover the SSE framing and the stream-json interpreter —
   # the layer that silently dropped every answer until it was fixed.
   relay:
     name: Relay tests
