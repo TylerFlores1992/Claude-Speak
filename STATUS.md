@@ -5,8 +5,11 @@ first time, watched a history pull land from a live cloud session, and fixed
 the environment that had been quietly breaking both. Read this first when
 picking the project back up.
 
-The last code merge is `4964208`; this document's own merge sits on top of it.
-Four merges landed in that session, in order:
+The iOS app is finished for now and **unchanged by any of the Android work
+below** — that was the condition it was done under, and `git status` was checked
+against `PocketClaude/`, `relay/` and `ios.yml` on every commit.
+
+Merges, in order:
 
 | | |
 |---|---|
@@ -14,12 +17,17 @@ Four merges landed in that session, in order:
 | `8df72f8` | Two swallowed errors, the alert's baked-in spacing, `install-hook.ps1` shape check |
 | `8857b78` | The hook-install recipe said one file when it needs two |
 | `4964208` | A dropped hop costs the hop, not the whole wait |
+| `f225c83` | This document, rewritten |
+| `a80047f` | Android: skeleton and CI |
+| `e7fd069` | Android: SSE parser and request builder |
+| `e0bbe65` | Android: turn assembly, HTTP client, settings |
+| `6e0ae93` | Android: protocol moved to a JVM module that tests locally |
 
-**The relay machine needs a `git pull`.** Three of those four carry relay
-changes and relay changes do not ride TestFlight. It has not been done.
+**The relay machine needs a `git pull`.** It is now several merges behind and
+relay changes do not ride TestFlight. It has not been done.
 
-TestFlight was shipped twice: once from `8df72f8`, then again from `4964208`
-for the hop fix.
+TestFlight shipped twice, from `8df72f8` and from `4964208`. A third attempt in
+between was **cancelled mid-upload** — see the concurrency hazard below.
 
 ## The setup
 
@@ -74,6 +82,13 @@ recommended abandoning the architecture over it.
 - **Reading the reachability test.** `401` from a bare `GET` on `/answer` is a
   **pass** — the tunnel opened and the relay answered. `000` with `CONNECT
   tunnel failed, response 403` is the egress block.
+- **Merging to `main` cancels an in-flight TestFlight ship.** `ios.yml` sets
+  `concurrency: group: ios-${{ github.ref }}` with `cancel-in-progress: true`,
+  so a push to `main` and a `workflow_dispatch` on `main` share a group. Merging
+  a docs pull request killed run 216 six seconds before its upload finished, and
+  the step showed `cancelled` rather than failed, which reads like nothing
+  happened. **Merge everything first and dispatch the ship last.** `android.yml`
+  deliberately uses a different group so it can never do this.
 - **A history pull rides the next turn that finishes *in the session*,** from
   any surface — not the next thing you say in PocketClaude. One landed via an
   unrelated command run in the Claude app. Nothing signals when it arrives; the
@@ -159,6 +174,57 @@ Be honest about these rather than describing them as working:
   twice; the repair has not been.
 - **An answer from a Threaded Hope session.** The hook probes (above), so the
   path is established as far as the relay. Nothing has been heard back yet.
+
+## The Android client
+
+A Pixel 11 and a Pixel Watch 2 arrive on Wednesday, so `android/` is a second
+client of the same relay. **The relay needs no changes for it** — `relay/` is
+plain HTTP, SSE and a bearer token and does not know what is on the other end,
+which is what makes a second client cheap rather than a port.
+
+Stated by how far each piece is actually proven, because that distance is the
+whole story here:
+
+| | |
+|---|---|
+| `core/` — SSE framing, request building, turn assembly | **Tested.** 39 unit tests, run locally *and* in CI |
+| `RelayClient` — one POST and a read loop | **Compiled.** Never pointed at a relay |
+| `Settings` — address and token | **Compiled.** Never read or written on a device |
+| Phone UI, speech in and out | Placeholder / not started |
+| The watch | Placeholder. Its topology is settled, below |
+| Signing, Play listing | Not started. The Play account is paid for |
+
+**Nothing has run on a phone.**
+
+### Two constraints that are settled, not open questions
+
+**Tailscale does not run on Wear OS.**
+[tailscale/tailscale#3972](https://github.com/tailscale/tailscale/issues/3972)
+has been open since February 2022 with no assignee and no linked pull requests,
+labelled "L1 Very few" likelihood;
+[#12177](https://github.com/tailscale/tailscale/issues/12177) has the APK
+closing instantly on a Galaxy Watch. So the watch **cannot** reach the relay:
+the tailnet address is member-only, and the funnel publishes only `/answer`
+because mounting `/ask` would put Claude Code on the public internet.
+
+The watch therefore talks to the phone over the Wear Data Layer, and the phone
+owns the network. Same topology as the Apple Watch — but *less* work, because
+[`RecognizerIntent` runs on Wear OS](https://developer.android.com/training/wearables/user-input/voice),
+so the watch transcribes locally and sends a string rather than a WAV. The
+phone-side transcription stage disappears.
+
+**`dl.google.com` is egress-blocked from the build container**, so the Android
+SDK cannot be installed and no Android module compiles outside CI. That is why
+`core/` exists as a plain Kotlin JVM module: it needs no SDK, so its tests run
+anywhere, including here. Two settings protect that and both look wrong without
+their reason, which each carries in a comment — the root `build.gradle.kts` has
+no `plugins { ... apply false }` block, and `configureondemand=true` is set. Put
+either back and `:core:test` reaches for the blocked host again.
+
+```bash
+cd android && ./gradlew :core:test          # runs anywhere
+cd android && ./gradlew :app:assembleDebug  # needs the SDK, so CI
+```
 
 ## How the cloud lane works
 
@@ -265,7 +331,7 @@ app once; the sites checked and found *not* to be instances are
 ## Open threads
 
 0. **`git pull` on the relay machine.** Nothing else here is blocked on it, but
-   the relay is three merges behind and one of them is the `install-hook.ps1`
+   the relay is several merges behind and one of them is the `install-hook.ps1`
    hardening you would want before installing the hook into any further
    repository from there. Mind the restart gotcha above: only a fresh PID on
    8788 proves a restart happened.
@@ -304,7 +370,12 @@ app once; the sites checked and found *not* to be instances are
    lane is proven as far as the relay, but no answer has come back from it yet.
    The next attempt is also the first real test of the hop retry, since the
    previous one died exactly where that fix applies.
-7. **Add the third cause to the missing-hook alert.** It names two — no hook on
+7. **Finish the Android client.** In order: phone UI and speech, then the watch
+   over the Data Layer, then signing and a Play internal-testing track. All of
+   it needs the device to mean anything — the protocol half is already tested.
+   Anything that can be written as plain Kotlin belongs in `core/`, because that
+   is the only code in `android/` that can be run without CI.
+8. **Add the third cause to the missing-hook alert.** It names two — no hook on
    the branch, or a token mismatch — and there are three. A cloud environment
    whose **network policy** does not allow the funnel host fails identically:
    the hook posts, the CONNECT is refused with 403, and the hook swallows it by
