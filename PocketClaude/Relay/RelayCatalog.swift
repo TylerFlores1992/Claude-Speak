@@ -323,6 +323,7 @@ extension RelayClient {
         sessionID: String,
         text: String,
         timeout: TimeInterval = 900,
+        dropBackoff: TimeInterval = 2,
         onWaiting: (@Sendable (TimeInterval) -> Void)? = nil
     ) async throws -> String {
         // One hop's worth of waiting, on both ends. Long enough that a normal
@@ -330,6 +331,11 @@ extension RelayClient {
         // any client or proxy timeout.
         let hop: TimeInterval = 60
 
+        // Deliberately not retried, unlike the hops below. This request is what
+        // queues the message into the cloud session, and a connection that drops
+        // on the way back leaves no way to know whether it was queued or not.
+        // Sending again could put the same message into the session twice, which
+        // is worse than the error -- and the error already says to ask again.
         let sent = try await post(
             path: "cloud/ask",
             body: [
@@ -355,16 +361,52 @@ extension RelayClient {
         // as long as the interesting work takes.
         let started = Date()
         let deadline = started.addingTimeInterval(timeout)
+        // A dropped hop is supposed to cost the hop and nothing else -- that is
+        // the entire reason the wait is made of hops. It only does if the drop
+        // is caught: thrown straight out of this loop it ended the whole wait,
+        // while the turn went on running in the cloud and its answer landed in
+        // an inbox nothing would ever collect. On a phone, on cellular, behind
+        // a VPN, across a fifteen-minute wait, a connection that drops is the
+        // expected case rather than the exceptional one.
+        var consecutiveDrops = 0
         while Date() < deadline {
             onWaiting?(Date().timeIntervalSince(started))
-            let json = try await post(
-                path: "cloud/await",
-                body: [
-                    "sessionId": .string(sessionID),
-                    "timeoutMs": .number(hop * 1000),
-                ],
-                timeout: hop + 20
-            )
+            let json: JSONValue
+            do {
+                json = try await post(
+                    path: "cloud/await",
+                    body: [
+                        "sessionId": .string(sessionID),
+                        "timeoutMs": .number(hop * 1000),
+                    ],
+                    timeout: hop + 20
+                )
+            } catch let error as URLError where error.code != .cancelled {
+                // Only the transport is retried. A RelayError is an answer
+                // about this request -- a refusal, a bad token, a session with
+                // no hook -- and asking again would be told the same thing
+                // more slowly. `.cancelled` is not caught either: that is
+                // someone leaving the screen, not a network that faltered.
+                consecutiveDrops += 1
+                if consecutiveDrops >= Self.dropsBeforeGivingUp {
+                    throw RelayError.relay(
+                        "Lost the connection to the relay \(consecutiveDrops) times running "
+                            + "(\(error.localizedDescription)). The turn may still be running "
+                            + "on claude.ai — ask again and the answer will be waiting."
+                    )
+                }
+                // Back off rather than spin. A hop against a dead network
+                // fails instantly, so without this the retries would be spent
+                // in a fraction of a second -- and a wifi-to-cellular handover
+                // takes a few seconds to settle, which is exactly the outage
+                // worth surviving.
+                let seconds = min(dropBackoff * pow(2, Double(consecutiveDrops - 1)), 8)
+                if seconds > 0 {
+                    try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                }
+                continue
+            }
+            consecutiveDrops = 0
             if let answer = json["answer"]?.stringValue, !answer.isEmpty {
                 return answer
             }
@@ -382,6 +424,14 @@ extension RelayClient {
             "No answer came back. The turn may still be running on claude.ai — ask again and the answer will be waiting."
         )
     }
+
+    /// How many hops in a row may drop before the wait is abandoned.
+    ///
+    /// Enough to ride out a network changing underneath the phone -- with the
+    /// doubling backoff, roughly twenty seconds of outage -- and few enough
+    /// that a relay which has genuinely gone away is reported rather than hidden
+    /// behind a quarter of an hour of silent retrying.
+    static let dropsBeforeGivingUp = 5
 
     /// Said the same way from both places it can be discovered.
     ///
