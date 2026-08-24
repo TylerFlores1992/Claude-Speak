@@ -1164,6 +1164,51 @@ test("garbage output means nothing is live, not a crash", () => {
 //
 // Keeping these files pure ASCII sidesteps the encoding question entirely.
 
+// --- The Android manifests -------------------------------------------------
+//
+// Same reasoning as the PowerShell block below: CI is the only thing that can
+// compile the Android modules -- dl.google.com is egress-blocked, so the SDK
+// cannot be installed here -- and this checks the one property that has
+// actually broken them, from Node, for nothing.
+//
+// XML forbids "--" inside a comment. This project writes prose with a double
+// hyphen as an ASCII dash, so the two conventions collide the first time
+// anyone explains something in a manifest. When they do, the manifest merger
+// fails with "Error parsing AndroidManifest.xml" and no line number, which is
+// a poor clue for a rule nobody was thinking about.
+
+test("no XML comment contains a double hyphen", () => {
+  const root = fileURLToPath(new URL("..", import.meta.url));
+  const files = [];
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      // Skip build output and anything vendored; only sources are ours to fix.
+      if (entry.name === "build" || entry.name === ".gradle") continue;
+      if (entry.name === ".git" || entry.name === "node_modules") continue;
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.name.endsWith(".xml")) files.push(full);
+    }
+  };
+  walk(root);
+  assert.ok(files.length > 0, "expected at least one .xml file to check");
+
+  for (const file of files) {
+    const text = readFileSync(file, "utf8");
+    // Only inside comments. A double hyphen in ordinary content is legal.
+    for (const match of text.matchAll(/<!--([\s\S]*?)-->/g)) {
+      const inner = match[1];
+      if (!inner.includes("--")) continue;
+      const line = text.slice(0, match.index).split("\n").length;
+      assert.fail(
+        `${file.slice(root.length)} line ${line}: "--" inside an XML comment. ` +
+          "XML forbids it, and the Android manifest merger reports only " +
+          '"Error parsing AndroidManifest.xml" with no line number.'
+      );
+    }
+  }
+});
+
 test("the PowerShell scripts are pure ASCII", () => {
   const dir = fileURLToPath(new URL(".", import.meta.url));
   const scripts = readdirSync(dir).filter((name) => name.endsWith(".ps1"));
