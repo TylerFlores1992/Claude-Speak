@@ -20,5 +20,6 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "PocketClaude"
+include(":core")
 include(":app")
 include(":wear")

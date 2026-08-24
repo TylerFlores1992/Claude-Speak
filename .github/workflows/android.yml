@@ -59,9 +59,13 @@ jobs:
       # refuses a paths filter over. The report is uploaded so the count is
       # visible rather than inferred, and the summary line below puts it in the
       # log without having to download anything.
+      # testDebugUnitTest, not `test`. `test` runs the debug and release
+      # variants both, so every test executes twice and the count below reads
+      # as double the coverage there actually is. There are no variant-specific
+      # source sets here, so the second run asserts nothing the first did not.
       - name: Unit tests
         working-directory: android
-        run: ./gradlew --no-daemon test
+        run: ./gradlew --no-daemon :core:test :app:testDebugUnitTest :wear:testDebugUnitTest
 
       - name: Say how many tests ran
         if: always()
