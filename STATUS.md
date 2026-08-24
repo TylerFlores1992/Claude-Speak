@@ -5,8 +5,9 @@ first time, watched a history pull land from a live cloud session, and fixed
 the environment that had been quietly breaking both. Read this first when
 picking the project back up.
 
-`main` is at `a99293d`. The relay machine needs a `git pull` to match it —
-`a99293d` is relay-only and does not ride TestFlight.
+`main` is at `8df72f8`. The relay machine needs a `git pull` to match it: both
+`a99293d` and `8df72f8` carry relay changes, and relay changes do not ride
+TestFlight.
 
 ## The setup
 
@@ -20,8 +21,8 @@ picking the project back up.
   the cloud through Tailscale Funnel at
   `https://desktop-mdc5q6e.tailef3c66.ts.net/answer`.
 - **Cloud sessions**: created in the Claude app, added here by link. The Stop
-  hook that answers them is committed to `campsite-finder` on `master` and to
-  this repository in `.claude/`.
+  hook that answers them is committed to `campsite-finder` on `master`, to this
+  repository in `.claude/`, and to `Threaded_Hope` on `main`.
 - **Watch**: Apple Watch SE3, paired, working.
 - **Branch**: all work on the session's assigned `claude/…` branch,
   squash-merged to `main` via PR, then the branch is reset onto `main`.
@@ -83,6 +84,17 @@ A literal trailing `+` in `RELAY_ANSWER_URL` was the original bug. It is gone.
 Re-confirmed from a session started after the fix: the URL is correct, the
 funnel host resolves, and `GET /answer` returns 401.
 
+**Threaded Hope** (`env_017fxpjnM2HYnGcjWUwCjRcN`) was set up the same way
+afterwards, and `Threaded_Hope` got the hook it had never had — the repository
+had no `.claude` directory at all, which is why a session there took a message
+and answered nothing. Both halves are now in place; neither has been watched
+working, so treat that lane as configured, not proven.
+
+**CampHawk** (`env_01NNXGWqS3cK1KTqhy4dH3JF`) is the one still in doubt — see
+open thread 1. The environment list exposes names but no variable *values*, so
+a token mismatch cannot be diagnosed by reading it; only by testing from a
+session started afterward.
+
 ## Restarting the relay
 
 `Start-ScheduledTask` can report `LastTaskResult 0` while the **old** process
@@ -139,9 +151,21 @@ app, and the work runs on Anthropic's infrastructure.
   conversation on claude.ai.
 
 **A cloud session needs the hook on the branch it has checked out.** New
-sessions branched from the default branch get it. An older session needs one
-file:
-`git fetch origin master && git checkout origin/master -- .claude/hooks/answer-to-relay.mjs`.
+sessions branched from the default branch get it. An older session needs the
+files brought across by hand — *both* of them if that branch has no `.claude`
+at all, because the script with nothing wired to run it does nothing:
+
+```bash
+git fetch origin <default-branch>
+git checkout origin/<default-branch> -- .claude/hooks/answer-to-relay.mjs .claude/settings.json
+```
+
+Only the first file is needed when the repository already had the hook and you
+are updating it. `relay/hooks/README.md` has both cases and how to tell them
+apart. Two things that look like the file not existing, and are not: the commit
+that adds it has not merged yet, and `git fetch origin main` updates only
+`main`, so a branch pushed since the last full fetch is invisible to
+`git branch -r`.
 
 ## Known dead ends, with the reason
 
