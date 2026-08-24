@@ -54,9 +54,38 @@ jobs:
           key: gradle-${{ runner.os }}-${{ hashFiles('android/gradle/libs.versions.toml', 'android/**/*.gradle.kts') }}
           restore-keys: gradle-${{ runner.os }}-
 
+      # `test` prints nothing on success, so a green run cannot be told from a
+      # run that executed no tests at all. That is the same failure this repo
+      # refuses a paths filter over. The report is uploaded so the count is
+      # visible rather than inferred, and the summary line below puts it in the
+      # log without having to download anything.
       - name: Unit tests
         working-directory: android
         run: ./gradlew --no-daemon test
+
+      - name: Say how many tests ran
+        if: always()
+        working-directory: android
+        run: |
+          total=0
+          for f in $(find . -path '*/test-results/*' -name 'TEST-*.xml'); do
+            n=$(grep -o 'tests="[0-9]*"' "$f" | head -1 | grep -o '[0-9]*')
+            total=$((total + ${n:-0}))
+          done
+          echo "unit tests executed: $total"
+          echo "Unit tests executed: **$total**" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$total" -eq 0 ]; then
+            echo "No tests ran. A green build that ran nothing is not a pass."
+            exit 1
+          fi
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: android/**/build/reports/tests/**
+          if-no-files-found: warn
 
       - name: Assemble phone
         working-directory: android
